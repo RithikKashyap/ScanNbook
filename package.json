@@ -1,0 +1,11 @@
+{
+  "name": "qr-booking-system",
+  "version": "1.0.0",
+  "description": "## Overview The QR Booking System is a web application that allows users to book services using QR codes. The system consists of a frontend built with React and a backend built with Node.js and Express. Users can register, log in, book dates, process payments, and receive confirmation messages.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC"
+}
