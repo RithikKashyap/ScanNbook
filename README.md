@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # QR Booking System
 
 ## Overview
@@ -112,3 +113,6 @@ Contributions are welcome! Please open an issue or submit a pull request for any
 
 ## License
 This project is licensed under the MIT License. See the LICENSE file for details.
+=======
+# ScanNbook
+>>>>>>> 091832fb3e45a4ef625571f79327a2608bfa6740
