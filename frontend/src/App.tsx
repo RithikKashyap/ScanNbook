@@ -1,10 +1,12 @@
 ﻿import React, { useState } from 'react';
 
 type Page = 'login' | 'booking' | 'payment' | 'approval-waiting' | 'confirmation' | 'pending-login' | 'pending-payment' | 'admin-login' | 'admin-panel';
-const configuredApiBase = process.env.REACT_APP_API_BASE_URL;
-const API_BASES = configuredApiBase
-  ? [configuredApiBase]
-  : [ 'https://scannbook.onrender.com/api' , 'http://localhost:3100/api'];
+// const configuredApiBase = process.env.REACT_APP_API_BASE_URL;
+// const API_BASES = configuredApiBase
+//   ? [configuredApiBase]
+//   : [ 'https://scannbook.onrender.com/api' , 'http://localhost:3100/api'];
+
+const API_BASES = ['https://scannbook.onrender.com/api'];
 const ADMIN_USERNAME = process.env.REACT_APP_ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.REACT_APP_ADMIN_PASSWORD || 'admin123';
 const DEFAULT_HALL_IMAGE = '/Jharkhand_Kshatriya_Sangh.jpeg';
