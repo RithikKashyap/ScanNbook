@@ -10,12 +10,32 @@ const app = express();
 const PORT = process.env.PORT || 5000 ;
 
 // CORS configuration
+// app.use(cors({
+//     origin: [ 'https://scannbook-1.onrender.com', 'http://localhost:3000', 'http://localhost:3100', 'http://127.0.0.1:3000', 'http://127.0.0.1:3100' ],
+//     credentials: true,
+//     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+//     allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with']
+// }));
+
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',');
+
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:3100', 'http://127.0.0.1:3000', 'http://127.0.0.1:3100'],
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with']
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true); // allow server-to-server
+
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// VERY IMPORTANT: handle preflight
+app.options('*', cors());
 
 // Middleware
 app.use(express.json({ limit: '10mb' }));
@@ -30,7 +50,7 @@ mongoose.connect(process.env.DATABASE_URL || 'mongodb+srv://scannbook:Rithik8000
     console.log('✅ Connected to MongoDB database');
 })
 .catch((err: Error) => {
-    console.error('❌ Database connection error:', err);
+    console.error(' Database connection error:', err);
     process.exit(1);
 });
 
@@ -64,16 +84,16 @@ app.use('*', (req, res) => {
 
 // Error handler
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error('❌ Server error:', err);
+    console.error(' Server error:', err);
     res.status(500).json({ 
         message: 'Internal server error',
-        error: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+        error: process.env.NODE_ENV === 'production' ? err.message : 'Something went wrong'
     });
 });
 
 app.listen(PORT, () => {
-    console.log(`🚀 Server is running on http://localhost:${PORT}`);
-    console.log(`📚 API documentation available at http://localhost:${PORT}/api/health`);
+    console.log(` Server is running on http://localhost:${PORT}`);
+    console.log(` API documentation available at http://localhost:${PORT}/api/health`);
 });
 
 export default app;
