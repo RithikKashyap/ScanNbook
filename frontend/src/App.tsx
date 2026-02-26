@@ -2,9 +2,20 @@
 
 type Page = 'login' | 'booking' | 'payment' | 'approval-waiting' | 'confirmation' | 'pending-login' | 'pending-payment' | 'admin-login' | 'admin-panel';
 const configuredApiBase = (process.env.REACT_APP_API_BASE_URL || '').trim();
-const API_BASES = configuredApiBase
-  ? [configuredApiBase]
-  : ['https://scannbook.onrender.com/api', 'http://localhost:5000/api', 'http://localhost:3100/api'];
+const REMOTE_API_BASE = 'https://scannbook.onrender.com/api';
+const LOCAL_API_BASES = ['http://localhost:5000/api', 'http://localhost:3100/api'];
+const isBrowser = typeof window !== 'undefined';
+const isRuntimeLocalHost = isBrowser && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const isConfiguredLocalApi = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(configuredApiBase);
+const API_BASES = (() => {
+  if (configuredApiBase && !(isConfiguredLocalApi && !isRuntimeLocalHost)) {
+    return [configuredApiBase];
+  }
+  if (isRuntimeLocalHost) {
+    return [REMOTE_API_BASE, ...LOCAL_API_BASES];
+  }
+  return [REMOTE_API_BASE];
+})();
 const DEFAULT_HALL_IMAGE = '/Jharkhand_Kshatriya_Sangh.jpeg';
 const DEFAULT_HALL_IMAGES = [
   DEFAULT_HALL_IMAGE,
