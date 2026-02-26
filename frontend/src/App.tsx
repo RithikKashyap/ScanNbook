@@ -2377,7 +2377,6 @@ const BookingPage: React.FC<{
                         });
                       }}
                       onFocus={() => setBookingData({ ...bookingData, paymentType: 'custom', paymentAmount: bookingData.customAmount })}
-                      onWheel={(e) => e.preventDefault()} // Disable mouse wheel scrolling
                       placeholder="Enter amount"
                       style={{
                         width: '120px',
