@@ -7,6 +7,7 @@ const XLSX = require('xlsx');
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
+const jwt = require('jsonwebtoken');
 
 dotenv.config();
 
@@ -18,6 +19,10 @@ const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || '';
 const razorpayWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
 const upiId = process.env.UPI_ID || '';
 const upiPayeeName = process.env.UPI_PAYEE_NAME || 'Jharkhand Chhatriya Sangh Bhawan';
+const adminUsername = String(process.env.ADMIN_USERNAME || 'admin').trim();
+const adminPassword = String(process.env.ADMIN_PASSWORD || 'admin123');
+const adminJwtSecret = String(process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET || 'change-this-admin-secret');
+const adminTokenTtl = String(process.env.ADMIN_TOKEN_TTL || '12h');
 let razorpay = null;
 if (razorpayKeyId && razorpayKeySecret) {
     razorpay = new Razorpay({
@@ -25,6 +30,57 @@ if (razorpayKeyId && razorpayKeySecret) {
         key_secret: razorpayKeySecret
     });
 }
+
+const getAdminAuthPayload = (req) => {
+    const authHeader = String(req.headers.authorization || '');
+    if (!authHeader.toLowerCase().startsWith('bearer ')) return null;
+    const token = authHeader.slice(7).trim();
+    if (!token) return null;
+    try {
+        const decoded = jwt.verify(token, adminJwtSecret);
+        if (!decoded || decoded.role !== 'admin') return null;
+        return decoded;
+    } catch {
+        return null;
+    }
+};
+
+const requireAdminAuth = (req, res, next) => {
+    const payload = getAdminAuthPayload(req);
+    if (!payload) {
+        return res.status(401).json({ message: 'Admin authorization required' });
+    }
+    req.admin = payload;
+    next();
+};
+
+const parseBookingIdentity = (input = {}) => {
+    const bookingCode = String(input.bookingCode || '').trim();
+    const mobile = String(input.mobile || '').replace(/\D/g, '');
+    if (!/^\d{4}$/.test(bookingCode)) {
+        throw new Error('Booking code must be 4 digits');
+    }
+    if (mobile.length !== 10) {
+        throw new Error('Mobile must be exactly 10 digits');
+    }
+    return { bookingCode, mobile };
+};
+
+const bookingIdentityMatches = (booking, identity) => {
+    const bookingCode = String(booking?.bookingCode || '').trim();
+    const mobile = String(booking?.mobile || '').replace(/\D/g, '');
+    return bookingCode === identity.bookingCode && mobile === identity.mobile;
+};
+
+const getBookingApprovalState = (booking) => ({
+    userMarked: Boolean(booking?.userPaymentMarked),
+    adminApproved: Boolean(booking?.adminPaymentApproved),
+    adminRejected: Boolean(booking?.adminPaymentRejected),
+    rejectionReason: String(booking?.paymentRejectionReason || ''),
+    approvedAt: booking?.paymentApprovedAt || null,
+    requestedAt: booking?.paymentRequestAt || null,
+    updatedAt: booking?.paymentApprovalUpdatedAt || null
+});
 
 app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     try {
@@ -138,6 +194,13 @@ const bookingSchema = new mongoose.Schema({
     customAmount: { type: Number, default: 0 },
     whatsappNotification: { type: Boolean, default: true },
     profilePhoto: { type: String, default: null },
+    userPaymentMarked: { type: Boolean, default: false },
+    adminPaymentApproved: { type: Boolean, default: false },
+    adminPaymentRejected: { type: Boolean, default: false },
+    paymentRejectionReason: { type: String, default: '' },
+    paymentApprovedAt: { type: Date, default: null },
+    paymentRequestAt: { type: Date, default: null },
+    paymentApprovalUpdatedAt: { type: Date, default: null },
     source: { type: String, enum: ['manual', 'excel-import'], default: 'manual' },
     status: { type: String, enum: ['confirmed', 'pending', 'canceled'], default: 'confirmed' }
 }, { timestamps: true });
@@ -355,6 +418,30 @@ app.get('/api/health', (req, res) => {
         memory: process.memoryUsage(),
         node_version: process.version
     });
+});
+
+app.post('/api/auth/admin-login', (req, res) => {
+    try {
+        const username = String(req.body?.username || '').trim();
+        const password = String(req.body?.password || '');
+        if (!username || !password) {
+            return res.status(400).json({ message: 'Username and password are required' });
+        }
+        if (username !== adminUsername || password !== adminPassword) {
+            return res.status(401).json({ message: 'Invalid admin credentials' });
+        }
+        const token = jwt.sign(
+            { role: 'admin', username: adminUsername },
+            adminJwtSecret,
+            { expiresIn: adminTokenTtl }
+        );
+        return res.status(200).json({
+            message: 'Admin login successful',
+            token
+        });
+    } catch (error) {
+        return res.status(500).json({ message: 'Admin login failed', error: error.message });
+    }
 });
 
 app.post('/api/payments/initiate', async (req, res) => {
@@ -631,7 +718,7 @@ app.post('/api/bookings/public', async (req, res) => {
     }
 });
 
-app.post('/api/bookings', async (req, res) => {
+app.post('/api/bookings', requireAdminAuth, async (req, res) => {
     try {
         const payload = sanitizeBookingPayload(req.body);
         const bookingCode = await generateUniqueBookingCode();
@@ -642,7 +729,7 @@ app.post('/api/bookings', async (req, res) => {
     }
 });
 
-app.post('/api/bookings/admin-no-payment', async (req, res) => {
+app.post('/api/bookings/admin-no-payment', requireAdminAuth, async (req, res) => {
     try {
         const payload = sanitizeAdminNoPaymentPayload(req.body);
         const bookingCode = await generateUniqueBookingCode();
@@ -685,6 +772,100 @@ app.post('/api/bookings/pending-login', async (req, res) => {
     }
 });
 
+app.post('/api/bookings/:id/payment-request', async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) {
+            return res.status(404).json({ message: 'Booking not found' });
+        }
+
+        const identity = parseBookingIdentity(req.body || {});
+        if (!bookingIdentityMatches(booking, identity)) {
+            return res.status(403).json({ message: 'Booking verification failed' });
+        }
+
+        booking.userPaymentMarked = true;
+        booking.adminPaymentApproved = false;
+        booking.adminPaymentRejected = false;
+        booking.paymentRejectionReason = '';
+        booking.paymentApprovedAt = null;
+        booking.paymentRequestAt = new Date();
+        booking.paymentApprovalUpdatedAt = new Date();
+        await booking.save();
+
+        return res.status(200).json({
+            message: 'Payment request submitted successfully',
+            approval: getBookingApprovalState(booking)
+        });
+    } catch (error) {
+        return res.status(400).json({ message: 'Error creating payment request', error: error.message });
+    }
+});
+
+app.get('/api/bookings/:id/payment-approval', async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) {
+            return res.status(404).json({ message: 'Booking not found' });
+        }
+
+        const isAdmin = Boolean(getAdminAuthPayload(req));
+        if (!isAdmin) {
+            const identity = parseBookingIdentity({
+                bookingCode: req.query.bookingCode,
+                mobile: req.query.mobile
+            });
+            if (!bookingIdentityMatches(booking, identity)) {
+                return res.status(403).json({ message: 'Booking verification failed' });
+            }
+        }
+
+        return res.status(200).json({
+            message: 'Payment approval status fetched successfully',
+            approval: getBookingApprovalState(booking)
+        });
+    } catch (error) {
+        return res.status(400).json({ message: 'Error fetching payment approval status', error: error.message });
+    }
+});
+
+app.patch('/api/bookings/:id/payment-approval', requireAdminAuth, async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) {
+            return res.status(404).json({ message: 'Booking not found' });
+        }
+
+        const action = String(req.body?.action || '').toLowerCase();
+        const rejectionReason = String(req.body?.rejectionReason || '').trim();
+        if (!['approve', 'reject'].includes(action)) {
+            return res.status(400).json({ message: 'action must be approve or reject' });
+        }
+
+        booking.userPaymentMarked = true;
+        booking.paymentApprovalUpdatedAt = new Date();
+        if (action === 'approve') {
+            booking.adminPaymentApproved = true;
+            booking.adminPaymentRejected = false;
+            booking.paymentRejectionReason = '';
+            booking.paymentApprovedAt = new Date();
+        } else {
+            booking.adminPaymentApproved = false;
+            booking.adminPaymentRejected = true;
+            booking.paymentRejectionReason = rejectionReason || 'money not received';
+            booking.paymentApprovedAt = null;
+        }
+
+        await booking.save();
+        return res.status(200).json({
+            message: action === 'approve' ? 'Payment approved successfully' : 'Payment rejected successfully',
+            approval: getBookingApprovalState(booking)
+        });
+    } catch (error) {
+        return res.status(400).json({ message: 'Error updating payment approval', error: error.message });
+    }
+});
+
 app.post('/api/bookings/:id/pay-pending', async (req, res) => {
     try {
         const inputAmount = Number(req.body?.paymentAmount);
@@ -695,6 +876,11 @@ app.post('/api/bookings/:id/pay-pending', async (req, res) => {
         const booking = await Booking.findById(req.params.id);
         if (!booking) {
             return res.status(404).json({ message: 'Booking not found' });
+        }
+
+        const identity = parseBookingIdentity(req.body || {});
+        if (!bookingIdentityMatches(booking, identity)) {
+            return res.status(403).json({ message: 'Booking verification failed' });
         }
 
         const payableTotal = Number.isFinite(Number(booking.finalAmount)) ? Number(booking.finalAmount) : Number(booking.totalAmount);
@@ -711,6 +897,13 @@ app.post('/api/bookings/:id/pay-pending', async (req, res) => {
         booking.paymentAmount = updatedPaid;
         booking.paymentType = pendingAfter === 0 ? 'full' : 'custom';
         booking.status = 'confirmed';
+        booking.userPaymentMarked = true;
+        booking.adminPaymentApproved = false;
+        booking.adminPaymentRejected = false;
+        booking.paymentRejectionReason = '';
+        booking.paymentApprovedAt = null;
+        booking.paymentRequestAt = new Date();
+        booking.paymentApprovalUpdatedAt = new Date();
         await booking.save();
 
         res.json({
@@ -724,7 +917,7 @@ app.post('/api/bookings/:id/pay-pending', async (req, res) => {
     }
 });
 
-app.put('/api/bookings/:id', async (req, res) => {
+app.put('/api/bookings/:id', requireAdminAuth, async (req, res) => {
     try {
         const payload = sanitizeBookingPayload(req.body);
         const updated = await Booking.findByIdAndUpdate(
@@ -743,7 +936,7 @@ app.put('/api/bookings/:id', async (req, res) => {
     }
 });
 
-app.delete('/api/bookings/:id', async (req, res) => {
+app.delete('/api/bookings/:id', requireAdminAuth, async (req, res) => {
     try {
         const reason = (req.body?.reason || req.query?.reason || '').toString().trim();
         const customReason = (req.body?.customReason || '').toString().trim();
@@ -773,7 +966,7 @@ app.delete('/api/bookings/:id', async (req, res) => {
 });
 
 // Fallback endpoint for clients/proxies that block DELETE method
-app.post('/api/bookings/:id/delete', async (req, res) => {
+app.post('/api/bookings/:id/delete', requireAdminAuth, async (req, res) => {
     try {
         const reason = (req.body?.reason || '').toString().trim();
         const customReason = (req.body?.customReason || '').toString().trim();
@@ -802,7 +995,7 @@ app.post('/api/bookings/:id/delete', async (req, res) => {
     }
 });
 
-app.get('/api/bookings/export', async (req, res) => {
+app.get('/api/bookings/export', requireAdminAuth, async (req, res) => {
     try {
         const bookings = await Booking.find().sort({ createdAt: -1 });
         const rows = bookings.map((booking) => ({
@@ -841,7 +1034,7 @@ app.get('/api/bookings/export', async (req, res) => {
     }
 });
 
-app.post('/api/bookings/import', upload.single('file'), async (req, res) => {
+app.post('/api/bookings/import', requireAdminAuth, upload.single('file'), async (req, res) => {
     try {
         if (!req.file || !req.file.buffer) {
             return res.status(400).json({ message: 'Excel file is required' });

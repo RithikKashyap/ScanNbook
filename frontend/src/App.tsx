@@ -1,14 +1,10 @@
 ﻿import React, { useState } from 'react';
 
 type Page = 'login' | 'booking' | 'payment' | 'approval-waiting' | 'confirmation' | 'pending-login' | 'pending-payment' | 'admin-login' | 'admin-panel';
-// const configuredApiBase = process.env.REACT_APP_API_BASE_URL;
-// const API_BASES = configuredApiBase
-//   ? [configuredApiBase]
-//   : [ 'https://scannbook.onrender.com/api' , 'http://localhost:3100/api'];
-
-const API_BASES = ['https://scannbook.onrender.com/api'];
-const ADMIN_USERNAME = process.env.REACT_APP_ADMIN_USERNAME || 'admin';
-const ADMIN_PASSWORD = process.env.REACT_APP_ADMIN_PASSWORD || 'admin123';
+const configuredApiBase = (process.env.REACT_APP_API_BASE_URL || '').trim();
+const API_BASES = configuredApiBase
+  ? [configuredApiBase]
+  : ['https://scannbook.onrender.com/api', 'http://localhost:5000/api', 'http://localhost:3100/api'];
 const DEFAULT_HALL_IMAGE = '/Jharkhand_Kshatriya_Sangh.jpeg';
 const DEFAULT_HALL_IMAGES = [
   DEFAULT_HALL_IMAGE,
@@ -25,7 +21,7 @@ const DEFAULT_HALL_IMAGES = [
 const HALL_IMAGE_STORAGE_KEY = 'hallRoomImageUrl';
 const HALL_IMAGE_LIST_STORAGE_KEY = 'hallRoomImageUrls';
 const ADMIN_LOGO_STORAGE_KEY = 'adminPanelLogoUrl';
-const PAYMENT_APPROVAL_STORAGE_KEY = 'paymentApprovalByBooking';
+const ADMIN_TOKEN_STORAGE_KEY = 'adminAuthToken';
 
 type PaymentApprovalState = {
   userMarked: boolean;
@@ -36,56 +32,6 @@ type PaymentApprovalState = {
 };
 
 type PaymentApprovalMap = Record<string, PaymentApprovalState>;
-
-const readPaymentApprovalMap = (): PaymentApprovalMap => {
-  try {
-    if (typeof window === 'undefined') return {};
-    const raw = window.localStorage.getItem(PAYMENT_APPROVAL_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    return Object.entries(parsed).reduce<PaymentApprovalMap>((acc, [key, value]) => {
-      if (!key || !value || typeof value !== 'object') return acc;
-      const entry = value as any;
-      acc[key] = {
-        userMarked: Boolean(entry.userMarked),
-        adminApproved: Boolean(entry.adminApproved),
-        adminRejected: Boolean(entry.adminRejected),
-        rejectionReason: entry.rejectionReason ? String(entry.rejectionReason) : undefined,
-        approvedAt: entry.approvedAt ? String(entry.approvedAt) : undefined
-      };
-      return acc;
-    }, {});
-  } catch {
-    return {};
-  }
-};
-
-const writePaymentApprovalMap = (map: PaymentApprovalMap) => {
-  try {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(PAYMENT_APPROVAL_STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    // ignore storage errors
-  }
-};
-
-const updatePaymentApproval = (bookingKey: string, updater: (current: PaymentApprovalState | undefined) => PaymentApprovalState) => {
-  if (!bookingKey) return;
-  const currentMap = readPaymentApprovalMap();
-  currentMap[bookingKey] = updater(currentMap[bookingKey]);
-  writePaymentApprovalMap(currentMap);
-};
-
-const markUserPaymentRequest = (bookingKey: string) => {
-  updatePaymentApproval(bookingKey, (current) => ({
-    userMarked: true,
-    adminApproved: current?.adminApproved || false,
-    adminRejected: false,
-    rejectionReason: '',
-    approvedAt: current?.approvedAt
-  }));
-};
 
 const parseJsonSafe = async (response: Response) => {
   try {
@@ -108,6 +54,75 @@ const apiFetch = async (path: string, options?: RequestInit) => {
   }
 
   throw new Error(networkError?.message || 'Unable to connect to API server');
+};
+
+const withAdminAuth = (adminToken: string, headers: Record<string, string> = {}) => {
+  if (!adminToken.trim()) return headers;
+  return {
+    ...headers,
+    Authorization: `Bearer ${adminToken.trim()}`
+  };
+};
+
+const toPaymentApprovalState = (raw: any): PaymentApprovalState => ({
+  userMarked: Boolean(raw?.userMarked ?? raw?.userPaymentMarked),
+  adminApproved: Boolean(raw?.adminApproved ?? raw?.adminPaymentApproved),
+  adminRejected: Boolean(raw?.adminRejected ?? raw?.adminPaymentRejected),
+  rejectionReason: raw?.rejectionReason ?? raw?.paymentRejectionReason ?? '',
+  approvedAt: raw?.approvedAt ?? raw?.paymentApprovedAt ?? undefined
+});
+
+const createApprovalMapFromBookings = (bookings: BookingRecord[]): PaymentApprovalMap => {
+  return bookings.reduce<PaymentApprovalMap>((acc, booking) => {
+    acc[booking._id] = toPaymentApprovalState(booking);
+    return acc;
+  }, {});
+};
+
+const requestPaymentApprovalFromServer = async (bookingId: string, bookingCode: string, mobile: string) => {
+  if (!bookingId) return null;
+  const response = await apiFetch(`/bookings/${bookingId}/payment-request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bookingCode, mobile })
+  });
+  const result = await parseJsonSafe(response);
+  if (!response.ok) {
+    throw new Error(result?.error || result?.message || 'Unable to submit payment request');
+  }
+  return toPaymentApprovalState(result?.approval || result?.booking || {});
+};
+
+const fetchPaymentApprovalStatusFromServer = async (bookingId: string, bookingCode: string, mobile: string) => {
+  if (!bookingId) return null;
+  const query = new URLSearchParams({
+    bookingCode,
+    mobile
+  }).toString();
+  const response = await apiFetch(`/bookings/${bookingId}/payment-approval?${query}`);
+  const result = await parseJsonSafe(response);
+  if (!response.ok) {
+    throw new Error(result?.error || result?.message || 'Unable to refresh payment status');
+  }
+  return toPaymentApprovalState(result?.approval || result?.booking || {});
+};
+
+const submitPaymentApprovalDecision = async (
+  bookingId: string,
+  action: 'approve' | 'reject',
+  adminToken: string,
+  rejectionReason = ''
+) => {
+  const response = await apiFetch(`/bookings/${bookingId}/payment-approval`, {
+    method: 'PATCH',
+    headers: withAdminAuth(adminToken, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ action, rejectionReason })
+  });
+  const result = await parseJsonSafe(response);
+  if (!response.ok) {
+    throw new Error(result?.error || result?.message || 'Unable to update payment approval');
+  }
+  return toPaymentApprovalState(result?.approval || result?.booking || {});
 };
 
 interface BookingData {
@@ -148,6 +163,9 @@ interface BookingRecord {
   createdAt: string;
   userPaymentMarked?: boolean;
   adminPaymentApproved?: boolean;
+  adminPaymentRejected?: boolean;
+  paymentRejectionReason?: string;
+  paymentApprovedAt?: string;
 }
 
 interface PendingPaymentSession {
@@ -163,10 +181,21 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('login');
   const [saveError, setSaveError] = useState<string>('');
   const [pendingPaymentSession, setPendingPaymentSession] = useState<PendingPaymentSession | null>(null);
-  const [approvalWaitingBooking, setApprovalWaitingBooking] = useState<{ id: string; code?: string } | null>(null);
+  const [approvalWaitingBooking, setApprovalWaitingBooking] = useState<{ id: string; code: string; mobile: string } | null>(null);
   const [approvalWaitingStatus, setApprovalWaitingStatus] = useState<PaymentApprovalState | null>(null);
+  const [adminToken, setAdminToken] = useState<string>(() => {
+    try {
+      return window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => {
-    return window.sessionStorage.getItem('adminLoggedIn') === 'true';
+    try {
+      return Boolean(window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY));
+    } catch {
+      return false;
+    }
   });
   const [hallImageUrls, setHallImageUrls] = useState<string[]>(() => {
     try {
@@ -223,9 +252,21 @@ const App: React.FC = () => {
       }
       if (result?.booking?._id) {
         const bookingId = String(result.booking._id);
-        markUserPaymentRequest(bookingId);
-        const latestStatus = readPaymentApprovalMap()[bookingId] || null;
-        setApprovalWaitingBooking({ id: bookingId, code: result?.booking?.bookingCode || bookingData.bookingCode || '' });
+        let latestStatus: PaymentApprovalState | null = null;
+        try {
+          latestStatus = await requestPaymentApprovalFromServer(
+            bookingId,
+            String(result?.booking?.bookingCode || bookingData.bookingCode || ''),
+            String(result?.booking?.mobile || bookingData.mobile || '')
+          );
+        } catch (approvalError: any) {
+          setSaveError(approvalError?.message || 'Booking saved but payment request was not recorded');
+        }
+        setApprovalWaitingBooking({
+          id: bookingId,
+          code: String(result?.booking?.bookingCode || bookingData.bookingCode || ''),
+          mobile: String(result?.booking?.mobile || bookingData.mobile || '')
+        });
         setApprovalWaitingStatus(latestStatus);
         setCurrentPage('approval-waiting');
         return;
@@ -237,31 +278,31 @@ const App: React.FC = () => {
     }
   };
 
-  const refreshApprovalStatus = React.useCallback(() => {
+  const refreshApprovalStatus = React.useCallback(async () => {
     if (!approvalWaitingBooking?.id) return;
-    const status = readPaymentApprovalMap()[approvalWaitingBooking.id] || null;
-    setApprovalWaitingStatus(status);
-    if (status?.adminApproved) {
-      setCurrentPage('confirmation');
+    try {
+      const status = await fetchPaymentApprovalStatusFromServer(
+        approvalWaitingBooking.id,
+        approvalWaitingBooking.code,
+        approvalWaitingBooking.mobile
+      );
+      setApprovalWaitingStatus(status);
+      if (status?.adminApproved) {
+        setCurrentPage('confirmation');
+      }
+    } catch (error: any) {
+      setSaveError((prev) => prev || (error?.message || 'Unable to refresh payment status'));
     }
-  }, [approvalWaitingBooking?.id]);
+  }, [approvalWaitingBooking?.code, approvalWaitingBooking?.id, approvalWaitingBooking?.mobile]);
 
   React.useEffect(() => {
     if (currentPage !== 'approval-waiting' || !approvalWaitingBooking?.id) return;
-    refreshApprovalStatus();
-    const timer = window.setInterval(refreshApprovalStatus, 2000);
+    void refreshApprovalStatus();
+    const timer = window.setInterval(() => {
+      void refreshApprovalStatus();
+    }, 2000);
     return () => window.clearInterval(timer);
   }, [currentPage, approvalWaitingBooking?.id, refreshApprovalStatus]);
-
-  React.useEffect(() => {
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === PAYMENT_APPROVAL_STORAGE_KEY) {
-        refreshApprovalStatus();
-      }
-    };
-    window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
-  }, [refreshApprovalStatus]);
 
   const handlePendingPaymentLogin = async (bookingCode: string, mobile: string) => {
     const response = await apiFetch('/bookings/pending-login', {
@@ -309,14 +350,22 @@ const App: React.FC = () => {
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ paymentAmount: pendingPaymentSession.pendingAmount })
+      body: JSON.stringify({
+        paymentAmount: pendingPaymentSession.pendingAmount,
+        bookingCode: pendingPaymentSession.bookingCode,
+        mobile: pendingPaymentSession.mobile
+      })
     });
 
     const result = await parseJsonSafe(response);
     if (!response.ok) {
       throw new Error(result?.error || result?.message || 'Unable to complete pending payment');
     }
-    markUserPaymentRequest(String(pendingPaymentSession.bookingId || ''));
+    await requestPaymentApprovalFromServer(
+      String(pendingPaymentSession.bookingId || ''),
+      String(pendingPaymentSession.bookingCode || ''),
+      String(pendingPaymentSession.mobile || '')
+    );
   };
 
   const renderPage = () => {
@@ -373,7 +422,9 @@ const App: React.FC = () => {
           <PaymentApprovalWaitingPage
             bookingCode={approvalWaitingBooking?.code || bookingData.bookingCode}
             status={approvalWaitingStatus}
-            onRefresh={refreshApprovalStatus}
+            onRefresh={() => {
+              void refreshApprovalStatus();
+            }}
             onBackToPayment={() => setCurrentPage('payment')}
           />
         );
@@ -389,20 +440,24 @@ const App: React.FC = () => {
         return (
           <AdminLoginPage
             onBack={() => setCurrentPage('login')}
-            onLoginSuccess={() => {
+            onLoginSuccess={(token) => {
+              setAdminToken(token);
               setIsAdminLoggedIn(true);
+              window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
               window.sessionStorage.setItem('adminLoggedIn', 'true');
               setCurrentPage('admin-panel');
             }}
           />
         );
       case 'admin-panel':
-        if (!isAdminLoggedIn) {
+        if (!isAdminLoggedIn || !adminToken) {
           return (
             <AdminLoginPage
               onBack={() => setCurrentPage('login')}
-              onLoginSuccess={() => {
+              onLoginSuccess={(token) => {
+                setAdminToken(token);
                 setIsAdminLoggedIn(true);
+                window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
                 window.sessionStorage.setItem('adminLoggedIn', 'true');
                 setCurrentPage('admin-panel');
               }}
@@ -422,8 +477,11 @@ const App: React.FC = () => {
               }
             }}
             onBackToBooking={() => setCurrentPage('login')}
+            adminToken={adminToken}
             onLogout={() => {
               setIsAdminLoggedIn(false);
+              setAdminToken('');
+              window.sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
               window.sessionStorage.removeItem('adminLoggedIn');
               setCurrentPage('login');
             }}
@@ -2775,7 +2833,7 @@ const PaymentApprovalWaitingPage: React.FC<{
           </div>
           {rejected && (
             <div style={{ marginTop: '6px', color: '#7f1d1d', fontSize: '0.92rem' }}>
-              money not received
+              {status?.rejectionReason || 'Payment was not approved by admin'}
             </div>
           )}
         </div>
@@ -3115,21 +3173,36 @@ const ConfirmationPage: React.FC<{
   );
 };
 
-const AdminLoginPage: React.FC<{ onBack: () => void; onLoginSuccess: () => void }> = ({ onBack, onLoginSuccess }) => {
+const AdminLoginPage: React.FC<{ onBack: () => void; onLoginSuccess: (token: string) => void }> = ({ onBack, onLoginSuccess }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-
-    if (username.trim() === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-      onLoginSuccess();
-      return;
+    setSubmitting(true);
+    try {
+      const response = await apiFetch('/auth/admin-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim(), password })
+      });
+      const result = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(result?.error || result?.message || 'Invalid admin credentials');
+      }
+      const token = String(result?.token || '');
+      if (!token) {
+        throw new Error('Admin login token missing in response');
+      }
+      onLoginSuccess(token);
+    } catch (err: any) {
+      setError(err?.message || 'Invalid admin credentials');
+    } finally {
+      setSubmitting(false);
     }
-
-    setError('Invalid admin credentials');
   };
 
   return (
@@ -3191,6 +3264,7 @@ const AdminLoginPage: React.FC<{ onBack: () => void; onLoginSuccess: () => void 
           {error && <div style={{ color: '#dc2626', marginBottom: '12px', fontSize: '0.9rem' }}>{error}</div>}
           <button
             type="submit"
+            disabled={submitting}
             style={{
               width: '100%',
               border: 'none',
@@ -3199,10 +3273,11 @@ const AdminLoginPage: React.FC<{ onBack: () => void; onLoginSuccess: () => void 
               background: 'linear-gradient(135deg, #0f766e 0%, #0ea5e9 100%)',
               color: 'white',
               fontWeight: 700,
-              cursor: 'pointer'
+              cursor: submitting ? 'not-allowed' : 'pointer',
+              opacity: submitting ? 0.8 : 1
             }}
           >
-            Login
+            {submitting ? 'Logging in...' : 'Login'}
           </button>
         </form>
       </div>
@@ -3214,8 +3289,9 @@ const AdminPanelPage: React.FC<{
   hallImageUrls: string[];
   setHallImageUrls: (imageUrls: string[]) => void;
   onBackToBooking: () => void;
+  adminToken: string;
   onLogout: () => void;
-}> = ({ hallImageUrls, setHallImageUrls, onBackToBooking, onLogout }) => {
+}> = ({ hallImageUrls, setHallImageUrls, onBackToBooking, adminToken, onLogout }) => {
   const getStoredString = (key: string, fallback = '') => {
     try {
       const value = window.localStorage.getItem(key);
@@ -3283,7 +3359,6 @@ const AdminPanelPage: React.FC<{
   });
   const [selectedHallImageIndex, setSelectedHallImageIndex] = useState(0);
   const [adminLogoUrl, setAdminLogoUrl] = useState<string>(() => getStoredString(ADMIN_LOGO_STORAGE_KEY, ''));
-  const [paymentApprovalByBooking, setPaymentApprovalByBooking] = useState<PaymentApprovalMap>(() => readPaymentApprovalMap());
   type AdminContact = { name: string; profileType: string; contact: string };
   const [contactList, setContactList] = useState<AdminContact[]>(() => {
     try {
@@ -3417,6 +3492,7 @@ const AdminPanelPage: React.FC<{
       return [];
     }
   });
+  const paymentApprovalByBooking = React.useMemo(() => createApprovalMapFromBookings(records), [records]);
 
   React.useEffect(() => {
     try {
@@ -3428,20 +3504,6 @@ const AdminPanelPage: React.FC<{
       // ignore storage errors
     }
   }, [contactList, serviceProviderList, complainList, feedbackList]);
-
-  React.useEffect(() => {
-    writePaymentApprovalMap(paymentApprovalByBooking);
-  }, [paymentApprovalByBooking]);
-
-  React.useEffect(() => {
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === PAYMENT_APPROVAL_STORAGE_KEY) {
-        setPaymentApprovalByBooking(readPaymentApprovalMap());
-      }
-    };
-    window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
-  }, []);
 
   const removeComplain = (id: string) => {
     setComplainList((prev) => prev.filter((item) => item.id !== id));
@@ -3463,29 +3525,51 @@ const AdminPanelPage: React.FC<{
     removeComplain(item.id);
   };
 
-  const loadRecords = async () => {
-    setLoading(true);
-    setError('');
+  const handleUnauthorizedAdminResponse = (response: Response, fallbackMessage: string) => {
+    if (response.status === 401 || response.status === 403) {
+      onLogout();
+      throw new Error('Admin session expired. Please login again.');
+    }
+    throw new Error(fallbackMessage);
+  };
+
+  const loadRecords = React.useCallback(async (options?: { silent?: boolean }) => {
+    const silent = Boolean(options?.silent);
+    if (!silent) {
+      setLoading(true);
+      setError('');
+    }
     try {
-      const response = await apiFetch('/bookings');
+      const response = await apiFetch('/bookings', {
+        headers: withAdminAuth(adminToken)
+      });
       const result = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(result?.error || result?.message || 'Unable to load bookings');
+        handleUnauthorizedAdminResponse(
+          response,
+          result?.error || result?.message || 'Unable to load bookings'
+        );
       }
-      setRecords(result.bookings || []);
+      setRecords(result?.bookings || []);
     } catch (err: any) {
-      setError(err?.message || 'Unable to load bookings');
+      if (!silent) {
+        setError(err?.message || 'Unable to load bookings');
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
-  };
+  }, [adminToken, onLogout]);
 
   const exportExcel = async () => {
     setError('');
     try {
-      const response = await apiFetch('/bookings/export');
+      const response = await apiFetch('/bookings/export', {
+        headers: withAdminAuth(adminToken)
+      });
       if (!response.ok) {
-        throw new Error('Export failed');
+        handleUnauthorizedAdminResponse(response, 'Export failed');
       }
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -3508,11 +3592,12 @@ const AdminPanelPage: React.FC<{
       formData.append('file', file);
       const response = await apiFetch('/bookings/import', {
         method: 'POST',
+        headers: withAdminAuth(adminToken),
         body: formData
       });
       const result = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(result?.error || result?.message || 'Import failed');
+        handleUnauthorizedAdminResponse(response, result?.error || result?.message || 'Import failed');
       }
       await loadRecords();
       alert(`Import success. ${result.importedCount || 0} record(s) added.`);
@@ -3542,8 +3627,12 @@ const AdminPanelPage: React.FC<{
   };
 
   React.useEffect(() => {
-    loadRecords();
-  }, []);
+    void loadRecords();
+    const timer = window.setInterval(() => {
+      void loadRecords({ silent: true });
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [loadRecords]);
 
   const upcomingBookings = records
     .filter((r) => r.status !== 'canceled' && new Date(r.checkoutDate) >= new Date())
@@ -3747,41 +3836,48 @@ const AdminPanelPage: React.FC<{
     window.open(whatsappUrl, '_blank');
   };
 
-  const approveUserPayment = (record: BookingRecord) => {
-    if (!record?._id) return;
-    setPaymentApprovalByBooking((prev) => {
-      const current = prev[record._id];
-      return {
-        ...prev,
-        [record._id]: {
-          ...current,
-          userMarked: true,
-          adminApproved: true,
-          adminRejected: false,
-          rejectionReason: '',
-          approvedAt: new Date().toISOString()
-        }
-      };
-    });
-    setError('');
+  const applyApprovalStateToRecord = (bookingId: string, approval: PaymentApprovalState) => {
+    setRecords((prev) =>
+      prev.map((row) =>
+        row._id === bookingId
+          ? {
+              ...row,
+              userPaymentMarked: approval.userMarked,
+              adminPaymentApproved: approval.adminApproved,
+              adminPaymentRejected: Boolean(approval.adminRejected),
+              paymentRejectionReason: approval.rejectionReason || '',
+              paymentApprovedAt: approval.approvedAt
+            }
+          : row
+      )
+    );
   };
 
-  const rejectUserPayment = (record: BookingRecord) => {
+  const approveUserPayment = async (record: BookingRecord) => {
     if (!record?._id) return;
-    setPaymentApprovalByBooking((prev) => {
-      const current = prev[record._id];
-      return {
-        ...prev,
-        [record._id]: {
-          ...current,
-          userMarked: true,
-          adminApproved: false,
-          adminRejected: true,
-          rejectionReason: 'money not received'
-        }
-      };
-    });
-    setError('');
+    try {
+      setError('');
+      const approval = await submitPaymentApprovalDecision(record._id, 'approve', adminToken);
+      applyApprovalStateToRecord(record._id, approval);
+    } catch (err: any) {
+      setError(err?.message || 'Unable to approve payment');
+    }
+  };
+
+  const rejectUserPayment = async (record: BookingRecord) => {
+    if (!record?._id) return;
+    try {
+      setError('');
+      const approval = await submitPaymentApprovalDecision(
+        record._id,
+        'reject',
+        adminToken,
+        'money not received'
+      );
+      applyApprovalStateToRecord(record._id, approval);
+    } catch (err: any) {
+      setError(err?.message || 'Unable to reject payment');
+    }
   };
 
   const handleAdminLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3844,12 +3940,15 @@ const AdminPanelPage: React.FC<{
     try {
       const response = await apiFetch('/bookings/admin-no-payment', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withAdminAuth(adminToken, { 'Content-Type': 'application/json' }),
         body: JSON.stringify(adminBookingForm)
       });
       const result = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(result?.error || result?.message || 'Unable to create admin booking');
+        handleUnauthorizedAdminResponse(
+          response,
+          result?.error || result?.message || 'Unable to create admin booking'
+        );
       }
 
       setAdminBookingForm({
@@ -3914,12 +4013,15 @@ const AdminPanelPage: React.FC<{
     try {
       const response = await apiFetch(`/bookings/${editingId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withAdminAuth(adminToken, { 'Content-Type': 'application/json' }),
         body: JSON.stringify(editForm)
       });
       const result = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(result?.error || result?.message || 'Unable to update booking');
+        handleUnauthorizedAdminResponse(
+          response,
+          result?.error || result?.message || 'Unable to update booking'
+        );
       }
       setEditingId(null);
       await loadRecords();
@@ -3965,7 +4067,7 @@ const AdminPanelPage: React.FC<{
       // Prefer POST endpoint so reason can be sent reliably.
       let response = await apiFetch(`/bookings/${pendingDelete.id}/delete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withAdminAuth(adminToken, { 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload)
       });
 
@@ -3974,14 +4076,17 @@ const AdminPanelPage: React.FC<{
         const query = new URLSearchParams({ reason: payload.reason }).toString();
         response = await apiFetch(`/bookings/${pendingDelete.id}?${query}`, {
           method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
+          headers: withAdminAuth(adminToken, { 'Content-Type': 'application/json' }),
           body: JSON.stringify(payload)
         });
       }
 
       const result = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(result?.error || result?.message || 'Unable to delete booking');
+        handleUnauthorizedAdminResponse(
+          response,
+          result?.error || result?.message || 'Unable to delete booking'
+        );
       }
 
       if (editingId === pendingDelete.id) {
@@ -4142,7 +4247,7 @@ const AdminPanelPage: React.FC<{
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <button
                 onClick={() => {
-                  approveUserPayment(pendingApprovalRecords[0]);
+                  void approveUserPayment(pendingApprovalRecords[0]);
                 }}
                 style={{ border: 'none', borderRadius: '8px', padding: '7px 10px', background: '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 700 }}
               >
@@ -4150,7 +4255,7 @@ const AdminPanelPage: React.FC<{
               </button>
               <button
                 onClick={() => {
-                  rejectUserPayment(pendingApprovalRecords[0]);
+                  void rejectUserPayment(pendingApprovalRecords[0]);
                 }}
                 style={{ border: 'none', borderRadius: '8px', padding: '7px 10px', background: '#dc2626', color: '#fff', cursor: 'pointer', fontWeight: 700 }}
               >
@@ -4174,7 +4279,9 @@ const AdminPanelPage: React.FC<{
             <div style={{ fontSize: '0.85rem', opacity: 0.9 }}>Actions</div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
               <button
-                onClick={loadRecords}
+                onClick={() => {
+                  void loadRecords();
+                }}
                 title="Refresh"
                 aria-label="Refresh"
                 style={{ border: '1px solid #dbe2ff', background: '#ffffff', color: '#1f2937', borderRadius: '8px', width: '34px', height: '34px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
@@ -4918,13 +5025,17 @@ const AdminPanelPage: React.FC<{
                           ) : userMarked ? (
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                               <button
-                                onClick={() => approveUserPayment(row)}
+                                onClick={() => {
+                                  void approveUserPayment(row);
+                                }}
                                 style={{ border: 'none', borderRadius: '8px', padding: '6px 10px', background: '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 700 }}
                               >
                                 Money Received
                               </button>
                               <button
-                                onClick={() => rejectUserPayment(row)}
+                                onClick={() => {
+                                  void rejectUserPayment(row);
+                                }}
                                 style={{ border: 'none', borderRadius: '8px', padding: '6px 10px', background: '#dc2626', color: '#fff', cursor: 'pointer', fontWeight: 700 }}
                               >
                                 Reject
