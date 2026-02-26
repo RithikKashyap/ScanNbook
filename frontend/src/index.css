@@ -638,9 +638,21 @@ button:active {
 }
 
 @media (max-width: 760px) {
+  .page-center {
+    padding: 15px !important;
+    min-height: 100vh;
+  }
+
   .surface-card {
     border-radius: 16px !important;
     padding: 20px !important;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+  }
+
+  .booking-page .surface-card {
+    padding: 16px !important;
   }
 
   h1 {
@@ -649,33 +661,57 @@ button:active {
 
   h2 {
     font-size: clamp(1.35rem, 5.5vw, 1.8rem) !important;
+    margin-bottom: 16px !important;
+  }
+
+  .form-heading {
+    font-size: clamp(1.4rem, 5vw, 1.8rem) !important;
+  }
+
+  /* Form elements */
+  input, select, textarea {
+    padding: 12px !important;
+    font-size: 0.95rem !important;
+    border-radius: 8px !important;
+  }
+
+  /* Button styles */
+  button {
+    padding: 12px 16px !important;
+    font-size: 0.95rem !important;
+    border-radius: 8px !important;
+  }
+
+  .nav-back-btn {
+    font-size: 1.3rem !important;
+    margin-bottom: 16px !important;
   }
 
   .calendar-weekdays-grid {
-    gap: 3px !important;
-    margin-bottom: 6px !important;
-    font-size: 0.62rem !important;
+    gap: 2px !important;
+    margin-bottom: 4px !important;
+    font-size: 0.58rem !important;
   }
 
   .calendar-days-grid {
-    gap: 3px !important;
+    gap: 2px !important;
   }
 
   .calendar-day-card {
-    min-height: 56px !important;
-    padding: 4px !important;
-    border-radius: 7px !important;
+    min-height: 38px !important;
+    padding: 2px !important;
+    border-radius: 5px !important;
   }
 
   .calendar-day-card > div:first-child {
-    font-size: 0.7rem !important;
-    margin-bottom: 2px !important;
+    font-size: 0.6rem !important;
+    margin-bottom: 1px !important;
   }
 
   .calendar-day-sub,
   .calendar-day-meta {
-    font-size: 0.56rem !important;
-    line-height: 1.15 !important;
+    font-size: 0.45rem !important;
+    line-height: 1.05 !important;
   }
 
   .admin-day-card .calendar-day-sub {
@@ -713,6 +749,147 @@ button:active {
     text-align: left;
   }
 
+}
+
+/* Extra small mobile devices */
+@media (max-width: 480px) {
+  .page-center {
+    padding: 12px !important;
+  }
+
+  .surface-card {
+    padding: 16px !important;
+    border-radius: 12px !important;
+  }
+
+  .booking-page .surface-card {
+    padding: 12px !important;
+  }
+
+  h2, .form-heading {
+    font-size: clamp(1.2rem, 4.5vw, 1.5rem) !important;
+    margin-bottom: 12px !important;
+  }
+
+  /* Tighter form spacing */
+  input, select, textarea {
+    padding: 10px !important;
+    font-size: 0.9rem !important;
+  }
+
+  button {
+    padding: 10px 12px !important;
+    font-size: 0.9rem !important;
+  }
+
+  .nav-back-btn {
+    font-size: 1.2rem !important;
+    margin-bottom: 12px !important;
+  }
+
+  /* Form field margins */
+  label {
+    margin-bottom: 6px !important;
+    font-size: 0.9rem !important;
+  }
+
+  /* Info boxes */
+  .info-box, .time-info {
+    padding: 8px 10px !important;
+    font-size: 0.8rem !important;
+    margin: 8px 0 !important;
+  }
+  .calendar-day-card {
+    min-height: 35px !important;
+    padding: 2px !important;
+    border-radius: 4px !important;
+  }
+
+  .calendar-day-card > div:first-child {
+    font-size: 0.55rem !important;
+    margin-bottom: 0px !important;
+  }
+
+  .calendar-day-sub,
+  .calendar-day-meta {
+    font-size: 0.42rem !important;
+    line-height: 1.0 !important;
+  }
+
+  .calendar-weekdays-grid {
+    gap: 1px !important;
+    margin-bottom: 3px !important;
+    font-size: 0.55rem !important;
+  }
+
+  .calendar-days-grid {
+    gap: 1px !important;
+  }
+}
+
+/* Very small mobile devices (like older iPhones) */
+@media (max-width: 375px) {
+  .page-center {
+    padding: 10px !important;
+  }
+
+  .surface-card {
+    padding: 12px !important;
+    border-radius: 10px !important;
+  }
+
+  .booking-page .surface-card {
+    padding: 10px !important;
+  }
+
+  h2, .form-heading {
+    font-size: clamp(1.1rem, 4vw, 1.3rem) !important;
+    margin-bottom: 10px !important;
+  }
+
+  input, select, textarea {
+    padding: 8px !important;
+    font-size: 0.85rem !important;
+  }
+
+  button {
+    padding: 8px 10px !important;
+    font-size: 0.85rem !important;
+  }
+
+  .nav-back-btn {
+    font-size: 1.1rem !important;
+    margin-bottom: 10px !important;
+  }
+
+  label {
+    font-size: 0.85rem !important;
+    margin-bottom: 4px !important;
+  }
+
+  .info-box, .time-info {
+    padding: 6px 8px !important;
+    font-size: 0.75rem !important;
+    margin: 6px 0 !important;
+  }
+
+  .calendar-day-card {
+    min-height: 32px !important;
+    padding: 1px !important;
+  }
+
+  .calendar-day-card > div:first-child {
+    font-size: 0.52rem !important;
+  }
+
+  .calendar-day-sub,
+  .calendar-day-meta {
+    font-size: 0.4rem !important;
+  }
+
+  .calendar-weekdays-grid {
+    font-size: 0.52rem !important;
+  }
 }
 
 @keyframes fade-up {

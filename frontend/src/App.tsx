@@ -911,7 +911,7 @@ const LoginPage: React.FC<{
               color: '#667eea'
             }}
           >
-            {t.back}
+            ← {t.back}
           </button>
           <div style={{ display: 'flex', alignItems: 'center' }}>
             <div ref={settingsMenuRef} className="settings-wrap" style={{ position: 'relative' }}>
@@ -1622,7 +1622,7 @@ const PendingPaymentLoginPage: React.FC<{
           onClick={onBack}
           style={{ background: 'none', border: 'none', fontSize: '1rem', cursor: 'pointer', marginBottom: '16px', color: '#334155' }}
         >
-          Back
+          ← Back
         </button>
         <h2 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>Pending Payment Login</h2>
         <p style={{ margin: '0 0 20px 0', color: '#475569' }}>Login with your 4-digit allotment code and mobile number.</p>
@@ -2595,7 +2595,8 @@ const PaymentPage: React.FC<{
               fontSize: '1rem',
               fontWeight: '700',
               cursor: processing ? 'not-allowed' : 'pointer',
-              opacity: processing ? 0.85 : 1
+              opacity: processing ? 0.85 : 1,
+              display: 'none'
             }}
           >
             {processing ? 'Processing...' : 'Pay with Razorpay'}
@@ -2614,7 +2615,8 @@ const PaymentPage: React.FC<{
               fontSize: '1rem',
               fontWeight: '700',
               cursor: processing ? 'not-allowed' : 'pointer',
-              opacity: processing ? 0.85 : 1
+              opacity: processing ? 0.85 : 1,
+              display: 'none'
             }}
           >
             Pay with UPI App
