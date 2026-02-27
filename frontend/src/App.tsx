@@ -1,6 +1,6 @@
 ﻿import React, { useState } from 'react';
 
-type Page = 'login' | 'booking' | 'payment' | 'approval-waiting' | 'confirmation' | 'pending-login' | 'pending-payment' | 'admin-login' | 'admin-panel';
+type Page = 'login' | 'booking' | 'summary' | 'payment' | 'approval-waiting' | 'confirmation' | 'pending-login' | 'pending-payment' | 'admin-login' | 'admin-panel';
 const configuredApiBase = (process.env.REACT_APP_API_BASE_URL || '').trim();
 const REMOTE_API_BASE = 'https://scannbook.onrender.com/api';
 const LOCAL_API_BASES = ['http://localhost:5000/api', 'http://localhost:3100/api'];
@@ -149,6 +149,7 @@ interface BookingData {
   paymentType: 'advance' | 'full' | 'custom';
   totalAmount: number;
   customAmount: number;
+  includeSecurityDeposit: boolean;
   whatsappNotification: boolean;
   profilePhoto: string | null;
 }
@@ -194,6 +195,7 @@ const App: React.FC = () => {
   const [pendingPaymentSession, setPendingPaymentSession] = useState<PendingPaymentSession | null>(null);
   const [approvalWaitingBooking, setApprovalWaitingBooking] = useState<{ id: string; code: string; mobile: string } | null>(null);
   const [approvalWaitingStatus, setApprovalWaitingStatus] = useState<PaymentApprovalState | null>(null);
+  const [approvalWaitingContext, setApprovalWaitingContext] = useState<'booking' | 'pending-payment'>('booking');
   const [adminToken, setAdminToken] = useState<string>(() => {
     try {
       return window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || '';
@@ -229,7 +231,7 @@ const App: React.FC = () => {
   const [bookingData, setBookingData] = useState<BookingData>({
     bookingCode: '',
     name: '',
-    purpose: '',
+    purpose: 'stay',
     gender: '',
     email: '',
     mobile: '',
@@ -239,6 +241,7 @@ const App: React.FC = () => {
     paymentType: 'advance',
     totalAmount: 3500,
     customAmount: 1000,
+    includeSecurityDeposit: true,
     whatsappNotification: true,
     profilePhoto: null
   });
@@ -279,6 +282,7 @@ const App: React.FC = () => {
           mobile: String(result?.booking?.mobile || bookingData.mobile || '')
         });
         setApprovalWaitingStatus(latestStatus);
+        setApprovalWaitingContext('booking');
         setCurrentPage('approval-waiting');
         return;
       }
@@ -299,12 +303,20 @@ const App: React.FC = () => {
       );
       setApprovalWaitingStatus(status);
       if (status?.adminApproved) {
-        setCurrentPage('confirmation');
+        if (approvalWaitingContext === 'pending-payment') {
+          setPendingPaymentSession(null);
+          setApprovalWaitingBooking(null);
+          setApprovalWaitingStatus(null);
+          setCurrentPage('pending-login');
+          alert('Pending payment approved by admin');
+        } else {
+          setCurrentPage('confirmation');
+        }
       }
     } catch (error: any) {
       setSaveError((prev) => prev || (error?.message || 'Unable to refresh payment status'));
     }
-  }, [approvalWaitingBooking?.code, approvalWaitingBooking?.id, approvalWaitingBooking?.mobile]);
+  }, [approvalWaitingBooking?.code, approvalWaitingBooking?.id, approvalWaitingBooking?.mobile, approvalWaitingContext]);
 
   React.useEffect(() => {
     if (currentPage !== 'approval-waiting' || !approvalWaitingBooking?.id) return;
@@ -372,11 +384,19 @@ const App: React.FC = () => {
     if (!response.ok) {
       throw new Error(result?.error || result?.message || 'Unable to complete pending payment');
     }
-    await requestPaymentApprovalFromServer(
+    const latestStatus = await requestPaymentApprovalFromServer(
       String(pendingPaymentSession.bookingId || ''),
       String(pendingPaymentSession.bookingCode || ''),
       String(pendingPaymentSession.mobile || '')
     );
+    setApprovalWaitingBooking({
+      id: String(pendingPaymentSession.bookingId || ''),
+      code: String(pendingPaymentSession.bookingCode || ''),
+      mobile: String(pendingPaymentSession.mobile || '')
+    });
+    setApprovalWaitingStatus(latestStatus);
+    setApprovalWaitingContext('pending-payment');
+    setCurrentPage('approval-waiting');
   };
 
   const renderPage = () => {
@@ -405,9 +425,6 @@ const App: React.FC = () => {
             onBack={() => setCurrentPage('pending-login')}
             onSuccess={async () => {
               await handlePendingPaymentSuccess();
-              alert('Pending payment completed successfully');
-              setPendingPaymentSession(null);
-              setCurrentPage('login');
             }}
           />
         );
@@ -416,8 +433,17 @@ const App: React.FC = () => {
           <BookingPage 
             bookingData={bookingData}
             setBookingData={setBookingData}
-            onNext={() => setCurrentPage('payment')}
+            onNext={() => setCurrentPage('summary')}
             onBack={() => setCurrentPage('login')}
+          />
+        );
+      case 'summary':
+        return (
+          <PaymentSummaryPage
+            bookingData={bookingData}
+            setBookingData={setBookingData}
+            onNext={() => setCurrentPage('payment')}
+            onBack={() => setCurrentPage('booking')}
           />
         );
       case 'payment':
@@ -425,7 +451,7 @@ const App: React.FC = () => {
           <PaymentPage 
             amount={bookingData.paymentAmount}
             onSuccess={saveBookingToMongo}
-            onBack={() => setCurrentPage('booking')}
+            onBack={() => setCurrentPage('summary')}
           />
         );
       case 'approval-waiting':
@@ -436,7 +462,7 @@ const App: React.FC = () => {
             onRefresh={() => {
               void refreshApprovalStatus();
             }}
-            onBackToPayment={() => setCurrentPage('payment')}
+            onBackToPayment={() => setCurrentPage(approvalWaitingContext === 'pending-payment' ? 'pending-payment' : 'payment')}
           />
         );
       case 'confirmation':
@@ -445,7 +471,8 @@ const App: React.FC = () => {
           setSaveError('');
           setApprovalWaitingBooking(null);
           setApprovalWaitingStatus(null);
-          setBookingData({ bookingCode: '', name: '', purpose: '', gender: '', email: '', mobile: '', checkinDate: '', checkoutDate: '', paymentAmount: 1000, paymentType: 'advance', totalAmount: 3500, customAmount: 1000, whatsappNotification: true, profilePhoto: null });
+          setApprovalWaitingContext('booking');
+          setBookingData({ bookingCode: '', name: '', purpose: 'stay', gender: '', email: '', mobile: '', checkinDate: '', checkoutDate: '', paymentAmount: 1000, paymentType: 'advance', totalAmount: 3500, customAmount: 1000, includeSecurityDeposit: true, whatsappNotification: true, profilePhoto: null });
         }} />;
       case 'admin-login':
         return (
@@ -535,9 +562,8 @@ const LoginPage: React.FC<{
 }> = ({ bookingData, hallImageUrls, setBookingData, onNext, onBack, onAdminLogin, onPendingPaymentLogin }) => {
   const [isHallImageOpen, setIsHallImageOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  type SettingsTab = 'contact' | 'service' | 'booking' | 'complain' | 'feedback' | 'language' | 'theme';
+  type SettingsTab = 'contact' | 'service' | 'booking' | 'complain' | 'feedback' | 'language';
   type AppLanguage = 'en' | 'hi';
-  type UiTheme = 'light' | 'dark';
   type SettingsProfile = { name: string; profileType: string; contact: string };
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab | null>(null);
   const [settingsContacts, setSettingsContacts] = useState<SettingsProfile[]>([]);
@@ -555,34 +581,7 @@ const LoginPage: React.FC<{
   const [settingsStatusText, setSettingsStatusText] = useState('');
   const settingsMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState<AppLanguage>('en');
-  const [selectedTheme, setSelectedTheme] = useState<UiTheme>(() => {
-    try {
-      const saved = window.localStorage.getItem('preferredTheme');
-      return saved === 'dark' ? 'dark' : 'light';
-    } catch {
-      return 'light';
-    }
-  });
-  const settingItems = ['Admin', 'Language', 'Theme', 'Contact', 'Service', 'Booking Details', 'Complain', 'Feedback'];
-  const getSettingIcon = (item: string) => {
-    const key = item.toLowerCase();
-    const iconPathByItem: Record<string, string> = {
-      admin: 'M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 0 0 0-7Zm8 3.5l-1.9-.7c-.1-.4-.2-.8-.3-1.1l1-1.7l-1.8-1.8l-1.7 1c-.4-.2-.8-.3-1.1-.4L13 4h-2l-.7 1.9c-.4.1-.8.2-1.1.4l-1.7-1L5.7 7.1l1 1.7c-.2.4-.3.8-.4 1.1L4.4 11v2l1.9.7c.1.4.2.8.4 1.1l-1 1.7l1.8 1.8l1.7-1c.4.2.8.3 1.1.4l.7 1.9h2l.7-1.9c.4-.1.8-.2 1.1-.4l1.7 1l1.8-1.8l-1-1.7c.2-.4.3-.8.3-1.1L20 13v-1Z',
-      language: 'M12 2a10 10 0 1 0 0 20a10 10 0 0 0 0-20Zm6.9 9h-3.1a15.8 15.8 0 0 0-1.2-5A8 8 0 0 1 18.9 11ZM12 4.1c.8 1.2 1.7 3.5 2 6.9h-4c.3-3.4 1.2-5.7 2-6.9ZM4.1 13h3.1c.2 1.8.6 3.6 1.2 5a8 8 0 0 1-4.3-5Zm3.1-2H4.1a8 8 0 0 1 4.3-5c-.6 1.4-1 3.2-1.2 5Zm4.8 8c-.8-1.2-1.7-3.5-2-6.9h4c-.3 3.4-1.2 5.7-2 6.9Zm2.4-1c.6-1.4 1-3.2 1.2-5h3.1a8 8 0 0 1-4.3 5Z',
-      theme: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z',
-      contact: 'M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.3c1.2.4 2.5.6 3.8.6c.6 0 1 .4 1 1V21c0 .6-.4 1-1 1C10.6 22 2 13.4 2 2c0-.6.4-1 1-1h4.5c.6 0 1 .4 1 1c0 1.3.2 2.6.6 3.8c.1.4 0 .8-.3 1.1l-2.2 2.2Z',
-      service: 'M2 19h20v2H2v-2Zm3-2h3l2-6H7l-2 6Zm7 0h3l2-10h-3l-2 10Zm7 0h3V3h-3v14Z',
-      'booking details': 'M7 2v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7Zm12 8H5v10h14V10Z',
-      complain: 'M1 21h22L12 2L1 21Zm12-3h-2v-2h2v2Zm0-4h-2v-4h2v4Z',
-      feedback: 'M2 5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6l-4 3V5Zm3 1l7 5l7-5H5Z',
-      default: 'M12 5a7 7 0 1 0 0 14a7 7 0 0 0 0-14Z'
-    };
-    return (
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        <path d={iconPathByItem[key] || iconPathByItem.default} />
-      </svg>
-    );
-  };
+  const settingItems = ['Admin', 'Language', 'Contact', 'Service', 'Check Date', 'Complain', 'Feedback'];
   const languageText = {
     en: {
       back: 'Back',
@@ -608,37 +607,37 @@ const LoginPage: React.FC<{
       close: 'Close'
     },
     hi: {
-      back: 'वापस',
-      customerDetails: 'ग्राहक विवरण',
-      fullName: 'पूरा नाम',
-      fullNamePlaceholder: 'अपना पूरा नाम दर्ज करें',
-      mobileNumber: 'मोबाइल नंबर',
-      mobilePlaceholder: 'अपना 10 अंकों का मोबाइल नंबर दर्ज करें',
-      purpose: 'उद्देश्य',
-      selectPurpose: 'उद्देश्य चुनें',
-      enterPurpose: 'उद्देश्य लिखें',
-      gender: 'लिंग',
-      selectGender: 'लिंग चुनें',
-      male: 'पुरुष',
-      female: 'महिला',
-      other: 'अन्य',
-      emailOptional: 'ईमेल (वैकल्पिक)',
-      emailPlaceholder: 'ईमेल पता दर्ज करें',
-      whatsapp: 'व्हाट्सऐप सूचनाएं',
-      continueBooking: 'बुकिंग जारी रखें',
-      pendingPaymentLogin: 'बकाया भुगतान लॉगिन',
-      language: 'भाषा',
-      close: 'बंद करें'
+      back: '????',
+      customerDetails: '?????? ?????',
+      fullName: '???? ???',
+      fullNamePlaceholder: '???? ???? ??? ???? ????',
+      mobileNumber: '?????? ????',
+      mobilePlaceholder: '???? 10 ????? ?? ?????? ???? ???? ????',
+      purpose: '????????',
+      selectPurpose: '???????? ?????',
+      enterPurpose: '???????? ?????',
+      gender: '????',
+      selectGender: '???? ?????',
+      male: '?????',
+      female: '?????',
+      other: '????',
+      emailOptional: '???? (????????)',
+      emailPlaceholder: '???? ??? ???? ????',
+      whatsapp: '????????? ???????',
+      continueBooking: '?????? ???? ????',
+      pendingPaymentLogin: '????? ?????? ?????',
+      language: '????',
+      close: '??? ????'
     }
   } as const;
   const t = languageText[selectedLanguage];
   const hallSlides = hallImageUrls.length ? hallImageUrls : DEFAULT_HALL_IMAGES;
   const [hallSlideIndex, setHallSlideIndex] = useState(0);
-  const purposeOptions = ['meeting', 'camp', 'picnic', 'function', 'program'] as const;
+  const purposeOptions = ['meeting', 'camp', 'picnic', 'function', 'shaadi', 'engagement', 'reception', 'stay'] as const;
   type PurposeOption = '' | (typeof purposeOptions)[number] | 'other';
   const initialPurpose = bookingData.purpose.trim().toLowerCase();
   const [purposeOption, setPurposeOption] = useState<PurposeOption>(() => {
-    if (!initialPurpose) return '';
+    if (!initialPurpose) return 'stay';
     return (purposeOptions as readonly string[]).includes(initialPurpose) ? (initialPurpose as PurposeOption) : 'other';
   });
   const [customPurpose, setCustomPurpose] = useState<string>(() =>
@@ -664,15 +663,6 @@ const LoginPage: React.FC<{
     document.addEventListener('mousedown', handleOutsideClick);
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
-
-  React.useEffect(() => {
-    try {
-      window.localStorage.setItem('preferredTheme', selectedTheme);
-    } catch {
-      // ignore storage errors
-    }
-    document.body.classList.toggle('theme-dark', selectedTheme === 'dark');
-  }, [selectedLanguage, selectedTheme]);
 
   const getStoredProfiles = (key: string) => {
     try {
@@ -708,10 +698,9 @@ const LoginPage: React.FC<{
 
     const tabMap: Record<string, SettingsTab> = {
       language: 'language',
-      theme: 'theme',
       contact: 'contact',
       service: 'service',
-      'booking details': 'booking',
+      'check date': 'booking',
       complain: 'complain',
       feedback: 'feedback'
     };
@@ -882,7 +871,7 @@ const LoginPage: React.FC<{
         >
           <div style={{ fontWeight: 700, fontSize: '0.82rem', color: isBooked ? '#fff' : '#0f172a' }}>{day}</div>
           <div className="calendar-day-sub" style={{ fontSize: '0.68rem', color: isBooked ? '#fff' : '#64748b', marginTop: '4px' }}>
-            {isBooked ? 'Already Booked' : 'Available'}
+            {isBooked ? 'Booked' : 'Available'}
           </div>
         </div>
       );
@@ -969,18 +958,19 @@ const LoginPage: React.FC<{
         boxShadow: '0 20px 40px rgba(0,0,0,0.1)'
       }}>
         <div className="card-topbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <button
-            onClick={onBack}
-            className="nav-back-btn"
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: '1.5rem',
-              cursor: 'pointer',
-              color: '#667eea'
-            }}
-          >
-            ← {t.back}
+        <button
+          onClick={onBack}
+          className="nav-back-btn compact-back-btn"
+          style={{
+            background: 'none',
+            border: 'none',
+            fontSize: '0.92rem',
+            cursor: 'pointer',
+            color: '#475569',
+            fontWeight: 600
+          }}
+        >
+          ? {t.back}
           </button>
           <div style={{ display: 'flex', alignItems: 'center' }}>
             <div ref={settingsMenuRef} className="settings-wrap" style={{ position: 'relative' }}>
@@ -1042,26 +1032,7 @@ const LoginPage: React.FC<{
                         cursor: 'pointer'
                       }}
                     >
-                      <span style={{ width: '100%', display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                        <span>{item}</span>
-                        <span
-                          style={{
-                            width: '20px',
-                            height: '20px',
-                            borderRadius: '999px',
-                            border: '1px solid #cbd5e1',
-                            background: '#f8fafc',
-                            color: '#334155',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '0.72rem',
-                            fontWeight: 700
-                          }}
-                        >
-                          {getSettingIcon(item)}
-                        </span>
-                      </span>
+                      {item}
                     </button>
                   ))}
                 </div>
@@ -1222,11 +1193,14 @@ const LoginPage: React.FC<{
               required
             >
               <option value="">{t.selectPurpose}</option>
-              <option value="meeting">{selectedLanguage === 'hi' ? 'मीटिंग' : 'Meeting'}</option>
-              <option value="camp">{selectedLanguage === 'hi' ? 'कैंप' : 'Camp'}</option>
-              <option value="picnic">{selectedLanguage === 'hi' ? 'पिकनिक' : 'Picnic'}</option>
-              <option value="function">{selectedLanguage === 'hi' ? 'फंक्शन' : 'Function'}</option>
-              <option value="program">{selectedLanguage === 'hi' ? 'प्रोग्राम' : 'Program'}</option>
+              <option value="meeting">{selectedLanguage === 'hi' ? '??????' : 'Meeting'}</option>
+              <option value="camp">{selectedLanguage === 'hi' ? '????' : 'Camp'}</option>
+              <option value="picnic">{selectedLanguage === 'hi' ? '??????' : 'Picnic'}</option>
+              <option value="function">{selectedLanguage === 'hi' ? '??????' : 'Function'}</option>
+              <option value="shaadi">{selectedLanguage === 'hi' ? '????' : 'Shaadi'}</option>
+              <option value="engagement">{selectedLanguage === 'hi' ? '????' : 'Engagement'}</option>
+              <option value="reception">{selectedLanguage === 'hi' ? '????????' : 'Reception'}</option>
+              <option value="stay">{selectedLanguage === 'hi' ? '????' : 'Stay'}</option>
               <option value="other">{t.other}</option>
             </select>
             {purposeOption === 'other' && (
@@ -1407,12 +1381,10 @@ const LoginPage: React.FC<{
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
               <h3 style={{ margin: 0, color: '#0f172a', textTransform: 'capitalize' }}>
                 {activeSettingsTab === 'booking'
-                  ? 'Booking Details'
+                  ? 'Check Date'
                   : activeSettingsTab === 'language'
                     ? 'Language'
-                    : activeSettingsTab === 'theme'
-                      ? 'Theme'
-                      : activeSettingsTab}
+                    : activeSettingsTab}
               </h3>
               <button
                 type="button"
@@ -1439,29 +1411,7 @@ const LoginPage: React.FC<{
                     onClick={() => setSelectedLanguage('hi')}
                     style={{ border: selectedLanguage === 'hi' ? '2px solid #1d4ed8' : '1px solid #cbd5e1', borderRadius: '8px', padding: '8px 12px', background: '#fff', color: '#0f172a', cursor: 'pointer', fontWeight: 700 }}
                   >
-                    हिन्दी
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {activeSettingsTab === 'theme' && (
-              <div style={{ display: 'grid', gap: '10px' }}>
-                <div style={{ color: '#334155', fontSize: '0.9rem' }}>Choose theme</div>
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedTheme('light')}
-                    style={{ border: selectedTheme === 'light' ? '2px solid #1d4ed8' : '1px solid #cbd5e1', borderRadius: '8px', padding: '8px 12px', background: '#fff', color: '#0f172a', cursor: 'pointer', fontWeight: 700 }}
-                  >
-                    Light
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedTheme('dark')}
-                    style={{ border: selectedTheme === 'dark' ? '2px solid #1d4ed8' : '1px solid #cbd5e1', borderRadius: '8px', padding: '8px 12px', background: '#fff', color: '#0f172a', cursor: 'pointer', fontWeight: 700 }}
-                  >
-                    Dark
+                    ??????
                   </button>
                 </div>
               </div>
@@ -1689,9 +1639,10 @@ const PendingPaymentLoginPage: React.FC<{
       <div className="surface-card" style={{ background: 'rgba(255, 255, 255, 0.95)', borderRadius: '20px', padding: '32px', maxWidth: '440px', width: '100%', boxShadow: '0 20px 40px rgba(0,0,0,0.1)' }}>
         <button
           onClick={onBack}
-          style={{ background: 'none', border: 'none', fontSize: '1rem', cursor: 'pointer', marginBottom: '16px', color: '#334155' }}
+          className="compact-back-btn"
+          style={{ background: 'none', border: 'none', fontSize: '0.92rem', cursor: 'pointer', marginBottom: '16px', color: '#475569', fontWeight: 600 }}
         >
-          ← Back
+          ? Back
         </button>
         <h2 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>Pending Payment Login</h2>
         <p style={{ margin: '0 0 20px 0', color: '#475569' }}>Login with your 4-digit allotment code and mobile number.</p>
@@ -1755,7 +1706,7 @@ const PendingPaymentPage: React.FC<{
       <div className="page-center" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
         <div style={{ background: '#fff', borderRadius: '16px', padding: '24px', maxWidth: '420px', width: '100%' }}>
           <p style={{ margin: '0 0 12px 0', color: '#334155' }}>Pending payment session expired.</p>
-          <button onClick={onBack} style={{ background: '#0f172a', color: 'white', border: 'none', borderRadius: '10px', padding: '10px 14px', cursor: 'pointer' }}>
+          <button onClick={onBack} className="compact-back-btn" style={{ background: '#0f172a', color: 'white', border: 'none', borderRadius: '10px', padding: '8px 12px', cursor: 'pointer', fontSize: '0.86rem', fontWeight: 600 }}>
             Back
           </button>
         </div>
@@ -1780,12 +1731,13 @@ const PendingPaymentPage: React.FC<{
       <div className="surface-card" style={{ background: 'rgba(255, 255, 255, 0.96)', borderRadius: '20px', padding: '32px', maxWidth: '460px', width: '100%', boxShadow: '0 20px 40px rgba(0,0,0,0.12)' }}>
         <button
           onClick={onBack}
-          style={{ background: 'none', border: 'none', fontSize: '1rem', cursor: 'pointer', marginBottom: '16px', color: '#334155' }}
+          className="compact-back-btn"
+          style={{ background: 'none', border: 'none', fontSize: '0.92rem', cursor: 'pointer', marginBottom: '16px', color: '#475569', fontWeight: 600 }}
         >
           Back
         </button>
-        <h2 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>Pending Payment</h2>
-        <p style={{ margin: '0 0 20px 0', color: '#475569' }}>Complete your remaining payment using your booking login.</p>
+        <h2 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>Pending Payment Details</h2>
+        <p style={{ margin: '0 0 20px 0', color: '#475569' }}>Review your booking details and submit payment request. Payment will be confirmed after admin approval.</p>
 
         <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginBottom: '14px' }}>
           <div style={{ marginBottom: '8px', color: '#0f172a' }}><strong>Name:</strong> {session.name}</div>
@@ -1806,7 +1758,7 @@ const PendingPaymentPage: React.FC<{
           disabled={processing}
           style={{ width: '100%', background: 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)', color: 'white', border: 'none', borderRadius: '12px', padding: '13px', fontSize: '1rem', fontWeight: 700, cursor: processing ? 'not-allowed' : 'pointer', opacity: processing ? 0.8 : 1 }}
         >
-          {processing ? 'Processing Payment...' : `Pay Rs ${session.pendingAmount} and Confirm`}
+          {processing ? 'Submitting Payment Request...' : `Pay Rs ${session.pendingAmount} and Request Admin Approval`}
         </button>
       </div>
     </div>
@@ -2006,20 +1958,20 @@ const BookingPage: React.FC<{
           key={dateKey}
           className={`calendar-day-card booking-day-card ${isBooked ? 'is-booked' : 'is-available'}`}
           style={{
-            minHeight: '84px',
+            minHeight: '62px',
             border: '1px solid #e9ecef',
             borderRadius: '8px',
-            padding: '6px',
+            padding: '4px',
             background: isBooked ? '#dc2626' : '#f8f9fa'
           }}
         >
-          <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '4px', color: isBooked ? '#ffffff' : '#333' }}>{day}</div>
+          <div style={{ fontWeight: 700, fontSize: '0.74rem', marginBottom: '2px', color: isBooked ? '#ffffff' : '#333' }}>{day}</div>
           {isBooked ? (
-            <div className="calendar-day-sub" style={{ fontSize: '0.72rem', color: '#ffffff', lineHeight: 1.3 }}>
-              Already Booked
+            <div className="calendar-day-sub" style={{ fontSize: '0.62rem', color: '#ffffff', lineHeight: 1.2 }}>
+              {'\u2022'}
             </div>
           ) : (
-            <div className="calendar-day-sub" style={{ fontSize: '0.72rem', color: '#868e96' }}>Available</div>
+            <div className="calendar-day-sub" style={{ fontSize: '0.62rem', color: '#868e96' }}>Open</div>
           )}
         </div>
       );
@@ -2046,14 +1998,15 @@ const BookingPage: React.FC<{
       }}>
         <button
           onClick={onBack}
-          className="nav-back-btn"
+          className="nav-back-btn compact-back-btn"
           style={{
             background: 'none',
             border: 'none',
-            fontSize: '1.5rem',
+            fontSize: '0.92rem',
             cursor: 'pointer',
             marginBottom: '20px',
-            color: '#667eea'
+            color: '#475569',
+            fontWeight: 600
           }}
         >
           Back
@@ -2133,7 +2086,7 @@ const BookingPage: React.FC<{
                     year: 'numeric', 
                     month: 'long', 
                     day: 'numeric' 
-                  })}{isDateBooked(date) ? ' (🔴 Already Booked)' : ''}
+                  })}
                 </option>
               ))}
             </select>
@@ -2198,7 +2151,7 @@ const BookingPage: React.FC<{
                       year: 'numeric', 
                       month: 'long', 
                       day: 'numeric' 
-                    })}{isDateBooked(date) ? ' (🔴 Already Booked)' : ''}
+                    })}
                   </option>
                 );
               })}
@@ -2255,9 +2208,9 @@ const BookingPage: React.FC<{
             <div className="calendar-weekdays-grid" style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-              gap: '6px',
-              marginBottom: '8px',
-              fontSize: '0.75rem',
+              gap: '4px',
+              marginBottom: '6px',
+              fontSize: '0.68rem',
               color: '#495057',
               fontWeight: 600
             }}>
@@ -2273,27 +2226,81 @@ const BookingPage: React.FC<{
             <div className="calendar-days-grid" style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-              gap: '6px'
+              gap: '4px'
             }}>
               {renderCalendar()}
             </div>
-            <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '8px' }}>
-              Red date means confirmed booking. Name shown inside each booked date.
+            <div style={{ fontSize: '0.72rem', color: '#666', marginTop: '8px' }}>
+              Red date means confirmed booking.
             </div>
             <div style={{ fontSize: '0.75rem', color: '#1e3a8a', marginTop: '6px', fontWeight: 600 }}>
               Check-in time: 7:30 AM | Check-out time: 6:30am
             </div>
           </div>
 
-          <div style={{
-            background: '#f8f9fa',
-            padding: '20px',
-            borderRadius: '10px',
-            marginBottom: '30px',
-            border: '1px solid #e9ecef'
-          }}>
-            <h3 style={{ margin: '0 0 20px 0', color: '#333', fontSize: '1.2rem' }}>Payment Summary</h3>
-            
+          <button
+            className="primary-cta success-cta"
+            type="submit"
+            style={{
+              width: '100%',
+              background: 'linear-gradient(135deg, #28a745 0%, #20c997 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '15px',
+              padding: '18px',
+              fontSize: '1.1rem',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'transform 0.2s ease',
+              boxShadow: '0 5px 15px rgba(40, 167, 69, 0.3)'
+            }}
+            onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
+            onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+          >
+            Continue to Payment Summary
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+const PaymentSummaryPage: React.FC<{
+  bookingData: BookingData;
+  setBookingData: (data: BookingData) => void;
+  onNext: () => void;
+  onBack: () => void;
+}> = ({ bookingData, setBookingData, onNext, onBack }) => {
+  const calculateMinAdvance = (totalAmount: number, days: number) => {
+    if (days <= 1) return 1000;
+    return Math.ceil(totalAmount * 0.3);
+  };
+
+  const stayDays = bookingData.checkinDate && bookingData.checkoutDate
+    ? Math.max(Math.ceil(Math.abs(new Date(bookingData.checkoutDate).getTime() - new Date(bookingData.checkinDate).getTime()) / (1000 * 60 * 60 * 24)), 1)
+    : 1;
+  const minAdvance = calculateMinAdvance(bookingData.totalAmount, stayDays);
+
+  return (
+    <div className="page-center" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div className="surface-card" style={{ background: 'rgba(255, 255, 255, 0.95)', borderRadius: '20px', padding: '32px', maxWidth: '500px', width: '100%', boxShadow: '0 20px 40px rgba(0,0,0,0.1)' }}>
+        <button
+          onClick={onBack}
+          className="compact-back-btn"
+          style={{ background: 'none', border: 'none', fontSize: '0.92rem', cursor: 'pointer', marginBottom: '16px', color: '#475569', fontWeight: 600 }}
+        >
+          ? Back
+        </button>
+
+        <h2 style={{ margin: '0 0 14px 0', color: '#111827' }}>Payment Summary</h2>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onNext();
+          }}
+        >
+          <div style={{ background: '#f8f9fa', padding: '20px', borderRadius: '10px', marginBottom: '24px', border: '1px solid #e9ecef' }}>
             <div style={{ marginBottom: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
                 <span style={{ color: '#666' }}>Total Booking Amount:</span>
@@ -2305,7 +2312,7 @@ const BookingPage: React.FC<{
               <label style={{ display: 'block', marginBottom: '10px', color: '#333', fontWeight: '500' }}>
                 Payment Option:
               </label>
-              
+
               <div style={{ marginBottom: '10px' }}>
                 <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', padding: '10px', border: bookingData.paymentType === 'advance' ? '2px solid #667eea' : '2px solid #e1e8ed', borderRadius: '8px', marginBottom: '10px' }}>
                   <input
@@ -2313,28 +2320,15 @@ const BookingPage: React.FC<{
                     name="paymentType"
                     value="advance"
                     checked={bookingData.paymentType === 'advance'}
-                    onChange={(e) => {
-                      const days = bookingData.checkinDate && bookingData.checkoutDate ? 
-                        Math.ceil(Math.abs(new Date(bookingData.checkoutDate).getTime() - new Date(bookingData.checkinDate).getTime()) / (1000 * 60 * 60 * 24)) : 1;
-                      const minAdvance = calculateMinAdvance(bookingData.totalAmount, days);
-                      setBookingData({ ...bookingData, paymentType: 'advance', paymentAmount: minAdvance });
-                    }}
+                    onChange={() => setBookingData({ ...bookingData, paymentType: 'advance', paymentAmount: minAdvance })}
                     style={{ marginRight: '10px' }}
                   />
                   <div>
                     <div style={{ fontWeight: '600', color: '#333' }}>
-                      Advance Payment - Rs {(() => {
-                        const days = bookingData.checkinDate && bookingData.checkoutDate ? 
-                          Math.ceil(Math.abs(new Date(bookingData.checkoutDate).getTime() - new Date(bookingData.checkinDate).getTime()) / (1000 * 60 * 60 * 24)) : 1;
-                        return calculateMinAdvance(bookingData.totalAmount, days);
-                      })()}
+                      Advance Payment - Rs {minAdvance}
                     </div>
                     <div style={{ fontSize: '0.9rem', color: '#666' }}>
-                      {(() => {
-                        const days = bookingData.checkinDate && bookingData.checkoutDate ? 
-                          Math.ceil(Math.abs(new Date(bookingData.checkoutDate).getTime() - new Date(bookingData.checkinDate).getTime()) / (1000 * 60 * 60 * 24)) : 1;
-                        return days <= 1 ? 'Minimum Rs 1000 for single day' : '30% of total amount for multiple days';
-                      })()} - rest at check-in
+                      {stayDays <= 1 ? 'Minimum Rs 1000 for single day' : '30% of total amount for multiple days'} - rest at check-in
                     </div>
                   </div>
                 </label>
@@ -2347,7 +2341,7 @@ const BookingPage: React.FC<{
                     name="paymentType"
                     value="full"
                     checked={bookingData.paymentType === 'full'}
-                    onChange={(e) => setBookingData({ ...bookingData, paymentType: 'full', paymentAmount: bookingData.totalAmount })}
+                    onChange={() => setBookingData({ ...bookingData, paymentType: 'full', paymentAmount: bookingData.totalAmount })}
                     style={{ marginRight: '10px' }}
                   />
                   <div>
@@ -2364,7 +2358,7 @@ const BookingPage: React.FC<{
                     name="paymentType"
                     value="custom"
                     checked={bookingData.paymentType === 'custom'}
-                    onChange={(e) => setBookingData({ ...bookingData, paymentType: 'custom', paymentAmount: bookingData.customAmount })}
+                    onChange={() => setBookingData({ ...bookingData, paymentType: 'custom', paymentAmount: bookingData.customAmount })}
                     style={{ marginRight: '10px' }}
                   />
                   <div style={{ flex: 1 }}>
@@ -2378,29 +2372,33 @@ const BookingPage: React.FC<{
                       pattern="[0-9]*"
                       value={bookingData.customAmount}
                       onChange={(e) => {
-                        // Only allow numbers
                         const value = e.target.value.replace(/[^0-9]/g, '');
                         const amount = Math.min(parseInt(value) || 0, bookingData.totalAmount);
-                        setBookingData({ 
-                          ...bookingData, 
+                        setBookingData({
+                          ...bookingData,
                           customAmount: amount,
                           paymentAmount: bookingData.paymentType === 'custom' ? amount : bookingData.paymentAmount
                         });
                       }}
                       onFocus={() => setBookingData({ ...bookingData, paymentType: 'custom', paymentAmount: bookingData.customAmount })}
                       placeholder="Enter amount"
-                      style={{
-                        width: '120px',
-                        padding: '8px 12px',
-                        border: '1px solid #e1e8ed',
-                        borderRadius: '6px',
-                        fontSize: '0.9rem',
-                        boxSizing: 'border-box'
-                      }}
+                      style={{ width: '120px', padding: '8px 12px', border: '1px solid #e1e8ed', borderRadius: '6px', fontSize: '0.9rem', boxSizing: 'border-box' }}
                     />
                   </div>
                 </label>
               </div>
+            </div>
+
+            <div style={{ marginBottom: '16px', borderTop: '1px solid #e9ecef', paddingTop: '14px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', color: '#1f2937', fontWeight: 600 }}>
+                <input
+                  type="checkbox"
+                  checked={bookingData.includeSecurityDeposit}
+                  onChange={(e) => setBookingData({ ...bookingData, includeSecurityDeposit: e.target.checked })}
+                  style={{ marginRight: '10px' }}
+                />
+                Include Security Deposit Option (Rs 500, pay at check-in)
+              </label>
             </div>
 
             <div style={{ borderTop: '1px solid #e9ecef', paddingTop: '15px' }}>
@@ -2414,14 +2412,8 @@ const BookingPage: React.FC<{
                 </p>
               )}
             </div>
-            
-            <div style={{
-              background: '#fee',
-              border: '1px solid #fcc',
-              borderRadius: '8px',
-              padding: '15px',
-              marginTop: '15px'
-            }}>
+
+            <div style={{ background: '#fee', border: '1px solid #fcc', borderRadius: '8px', padding: '15px', marginTop: '15px' }}>
               <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
                 <span style={{ color: '#d32f2f', fontSize: '1.1rem', marginRight: '8px' }}>!</span>
                 <span style={{ color: '#d32f2f', fontWeight: '600', fontSize: '1rem' }}>Important Note</span>
@@ -2431,9 +2423,6 @@ const BookingPage: React.FC<{
                 <br />
                 <br />
                 In addition, a separate {'\u20B9'}500 electricity security deposit will be collected during check-in. This amount will be refunded at check-out after adjusting for actual electricity consumption, if applicable.
-                <br />
-                <br />
-                Kindly ignore this message if the above payments have already been completed.
               </p>
             </div>
           </div>
@@ -2604,13 +2593,15 @@ const PaymentPage: React.FC<{
       }}>
         <button
           onClick={onBack}
+          className="compact-back-btn"
           style={{
             background: 'none',
             border: 'none',
-            fontSize: '1.1rem',
+            fontSize: '0.92rem',
             cursor: 'pointer',
             marginBottom: '20px',
-            color: '#667eea'
+            color: '#475569',
+            fontWeight: 600
           }}
         >
           Back
@@ -2873,107 +2864,6 @@ const ConfirmationPage: React.FC<{
   saveError: string;
   onNewBooking: () => void;
 }> = ({ bookingData, saveError, onNewBooking }) => {
-  
-  // Automatically send WhatsApp message if enabled
-  React.useEffect(() => {
-    if (bookingData.whatsappNotification && bookingData.mobile) {
-      // Auto-send WhatsApp message immediately when confirmation page loads
-      const timer = setTimeout(() => {
-        sendWhatsAppConfirmation();
-      }, 500); // Small delay to ensure page is fully loaded
-      
-      return () => clearTimeout(timer);
-    }
-  }, []);
-  
-  const sendWhatsAppConfirmation = () => {
-    const checkinDate = new Date(bookingData.checkinDate).toLocaleDateString('en-US', {
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric'
-    });
-    
-    const checkoutDate = new Date(bookingData.checkoutDate).toLocaleDateString('en-US', {
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric'
-    });
-    
-    const balanceAmount = bookingData.totalAmount - bookingData.paymentAmount;
-    const bookingCodeLine = bookingData.bookingCode ? `*Booking Code:* ${bookingData.bookingCode}\n\n` : '';
-    
-    const message = `*Booking Confirmed*\n\n` +
-      `Dear ${bookingData.name},\n` +
-      `Thank you for choosing our service. Your booking has been successfully confirmed.\n\n` +
-      `*Booking Details*\n\n` +
-      bookingCodeLine +
-      `*Name:* ${bookingData.name}\n\n` +
-      `*Mobile:* ${bookingData.mobile}\n\n` +
-      `*Purpose:* ${bookingData.purpose}\n\n` +
-      `*Gender:* ${bookingData.gender || 'Not specified'}\n\n` +
-      `${bookingData.email ? `*Email:* ${bookingData.email}\n\n` : ''}` +
-      `*Check-in:* ${checkinDate}\n\n` +
-      `*Check-in Time:* 7:30 AM\n\n` +
-      `*Check-out:* ${checkoutDate}\n\n` +
-      `*Check-out Time:* 6:30am\n\n` +
-      `*Total Amount:* Rs ${bookingData.totalAmount.toLocaleString()}\n\n` +
-      `*Advance Payment:* Rs ${bookingData.paymentAmount.toLocaleString()}\n\n` +
-      `*Amount Paid:* Rs ${bookingData.paymentAmount.toLocaleString()}\n\n` +
-      `${balanceAmount > 0 ? `*Balance Payable at Check-in:* Rs ${balanceAmount.toLocaleString()}\n\n` : ''}` +
-      `*Venue Address*\n\n` +
-      `Jharkhand Kshatriya Sangh Bhawan
-      Outer Circle Road, Near Baldwin School, Veher Road, Kadma, Jamshedpur, Jharkhand - 831005\n\n` +        
-      `*Additional Information*\n\n` +
-      `Guests are kindly requested to clear any pending balance before check-in. A refundable security deposit of ₹500 is also required at the time of arrival.\n\n` +
-      `In addition, a separate ₹500 electricity security deposit will be collected during check-in. This amount will be refunded at check-out after adjusting for actual electricity consumption, if applicable.\n\n` +
-      `Kindly ignore this message if the above payments have already been completed.\n\n` +
-      `We look forward to hosting you.\n` +
-      `Thank you for your booking!`;
-    
-    // Create WhatsApp link
-    const whatsappUrl = `https://wa.me/91${bookingData.mobile.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(message)}`;
-    
-    // Open WhatsApp in new tab
-    window.open(whatsappUrl, '_blank');
-  };
-
-  const sendAdminNotification = () => {
-    const adminWhatsApp = '7369024654';
-    
-    const checkinDate = new Date(bookingData.checkinDate).toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
-    });
-    
-    const remainingBalance = bookingData.totalAmount - bookingData.paymentAmount;
-    const paymentStatus = remainingBalance === 0 ? 'FULLY PAID' : `PAID Rs ${bookingData.paymentAmount}`;
-    const checkoutDate = new Date(bookingData.checkoutDate).toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
-    });
-    
-    const message = `*New Booking Alert*\n\n` +
-      `${bookingData.bookingCode ? `*Booking Code:* ${bookingData.bookingCode}\n` : ''}` +
-      `*Name:* ${bookingData.name}\n` +
-      `*Mobile:* ${bookingData.mobile}\n` +
-      `*Purpose:* ${bookingData.purpose}\n` +
-      `*Gender:* ${bookingData.gender || 'Not specified'}\n` +
-      `${bookingData.email ? `*Email:* ${bookingData.email}\n` : ''}` +
-      `*Check-in:* ${checkinDate} (7:30 AM)\n` +
-      `*Check-out:* ${checkoutDate} (6:30am)\n` +
-      `*Payment Status:* ${paymentStatus}\n` +
-      `*Remaining Balance:* Rs ${remainingBalance}`;
-    
-    // Create WhatsApp link for admin
-    const adminWhatsappUrl = `https://wa.me/91${adminWhatsApp}?text=${encodeURIComponent(message)}`;
-    
-    // Open WhatsApp in new tab
-    window.open(adminWhatsappUrl, '_blank');
-  };
   return (
     <div className="page-center" style={{
       minHeight: '100vh',
@@ -3109,75 +2999,29 @@ const ConfirmationPage: React.FC<{
         }}>
           <h4 style={{ margin: '0 0 10px 0', color: '#155724' }}>Confirmation Message</h4>
           <p style={{ color: '#155724', margin: 0, fontSize: '0.95rem' }}>
-            Your booking confirmation has been sent to your mobile number. Please save this information for your records. 
-            Show this confirmation at check-in.
+            WhatsApp message and admin notification are managed from Admin Panel after payment approval.
           </p>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-          {bookingData.whatsappNotification && (
-            <button
-              onClick={sendWhatsAppConfirmation}
-              style={{
-                background: 'linear-gradient(135deg, #25d366 0%, #128c7e 100%)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '15px',
-                padding: '18px 40px',
-                fontSize: '1.1rem',
-                fontWeight: '600',
-                cursor: 'pointer',
-                transition: 'transform 0.2s ease',
-                boxShadow: '0 5px 15px rgba(37, 211, 102, 0.3)'
-              }}
-              onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
-              onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
-            >
-              Send to WhatsApp
-            </button>
-          )}
-          
-          <button
-            onClick={sendAdminNotification}
-            style={{
-              background: 'linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '15px',
-              padding: '18px 40px',
-              fontSize: '1.1rem',
-              fontWeight: '600',
-              cursor: 'pointer',
-              transition: 'transform 0.2s ease',
-              boxShadow: '0 5px 15px rgba(255, 107, 107, 0.3)',
-              marginBottom: '15px'
-            }}
-            onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
-            onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
-          >
-            Notify Admin
-          </button>
-          
-          <button
-            onClick={onNewBooking}
-            style={{
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '15px',
-              padding: '18px 40px',
-              fontSize: '1.1rem',
-              fontWeight: '600',
-              cursor: 'pointer',
-              transition: 'transform 0.2s ease',
-              boxShadow: '0 5px 15px rgba(102, 126, 234, 0.3)'
-            }}
-            onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
-            onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
-          >
-            Make New Booking
-          </button>
-        </div>
+        <button
+          onClick={onNewBooking}
+          style={{
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: 'white',
+            border: 'none',
+            borderRadius: '15px',
+            padding: '18px 40px',
+            fontSize: '1.1rem',
+            fontWeight: '600',
+            cursor: 'pointer',
+            transition: 'transform 0.2s ease',
+            boxShadow: '0 5px 15px rgba(102, 126, 234, 0.3)'
+          }}
+          onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
+          onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+        >
+          Make New Booking
+        </button>
       </div>
     </div>
   );
@@ -3233,7 +3077,8 @@ const AdminLoginPage: React.FC<{ onBack: () => void; onLoginSuccess: (token: str
       }}>
         <button
           onClick={onBack}
-          style={{ background: 'none', border: 'none', color: '#334155', cursor: 'pointer', marginBottom: '14px' }}
+          className="compact-back-btn"
+          style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', marginBottom: '14px', fontSize: '0.92rem', fontWeight: 600 }}
         >
           Back
         </button>
@@ -3727,14 +3572,14 @@ const AdminPanelPage: React.FC<{
       `Guest Name: ${offerForm.name}\n` +
       `Check-in / Check-out: ${offerForm.checkin} – ${offerForm.checkout}\n` +
       `Hall/Room Purpose: ${offerForm.roomType}\n\n` +
-      `Original Amount: ₹${offerForm.original || '0'}\n` +
-      `Discount Applied: ₹${offerForm.discount || '0'}\n` +
-      `Final Payable Amount: ₹${offerForm.total || '0'}\n\n` +
-      `Payment Status: ${offerForm.paymentStatus}${offerForm.paymentStatus.toLowerCase().includes('fully') ? ' ✅' : ''}\n\n` +
-      `You have received a discount of ₹${offerForm.discount || '0'}. The final payable amount has been updated accordingly.\n\n` +
+      `Original Amount: ?${offerForm.original || '0'}\n` +
+      `Discount Applied: ?${offerForm.discount || '0'}\n` +
+      `Final Payable Amount: ?${offerForm.total || '0'}\n\n` +
+      `Payment Status: ${offerForm.paymentStatus}${offerForm.paymentStatus.toLowerCase().includes('fully') ? ' ?' : ''}\n\n` +
+      `You have received a discount of ?${offerForm.discount || '0'}. The final payable amount has been updated accordingly.\n\n` +
       `Important Payment Information\n\n` +
-      `Kindly ensure that any pending balance is cleared prior to check-in, along with a refundable security deposit of ₹500.\n\n` +
-      `Additionally, a separate ₹500 electricity security deposit will be collected at the time of check-in. This amount will be refunded at check-out after adjustment against actual electricity consumption, if applicable.\n\n` +
+      `Kindly ensure that any pending balance is cleared prior to check-in, along with a refundable security deposit of ?500.\n\n` +
+      `Additionally, a separate ?500 electricity security deposit will be collected at the time of check-in. This amount will be refunded at check-out after adjustment against actual electricity consumption, if applicable.\n\n` +
       `Please disregard this notice if the required payments have already been completed.`
     : '';
 
@@ -3823,6 +3668,74 @@ const AdminPanelPage: React.FC<{
     setSelectedHallImageIndex((prev) => Math.max(0, Math.min(prev, next.length - 1)));
   };
 
+  const getRecordPurposeLabel = (record: BookingRecord) => {
+    if (record.bookingPurpose === 'other') return record.bookingPurposeOther || 'Other';
+    const legacyPurpose = String((record as any)?.purpose || '').trim();
+    if (legacyPurpose) return legacyPurpose;
+    return record.bookingPurpose || 'Function';
+  };
+
+  const buildCustomerBookingWhatsappMessage = (record: BookingRecord) => {
+    const checkinDate = new Date(record.checkinDate).toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric'
+    });
+    const checkoutDate = new Date(record.checkoutDate).toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric'
+    });
+    const finalAmount = Number(record.finalAmount ?? record.totalAmount ?? 0);
+    const paidAmount = Number(record.paymentAmount ?? 0);
+    const pendingAmount = Math.max(finalAmount - paidAmount, 0);
+    return `*Booking Confirmed*\n\n` +
+      `Dear ${record.name},\n` +
+      `Your payment is approved by admin.\n\n` +
+      `*Booking Details*\n\n` +
+      `${record.bookingCode ? `*Booking Code:* ${record.bookingCode}\n\n` : ''}` +
+      `*Name:* ${record.name}\n\n` +
+      `*Mobile:* ${record.mobile}\n\n` +
+      `*Purpose:* ${getRecordPurposeLabel(record)}\n\n` +
+      `*Check-in:* ${checkinDate}\n\n` +
+      `*Check-out:* ${checkoutDate}\n\n` +
+      `*Final Amount:* Rs ${finalAmount.toLocaleString()}\n\n` +
+      `*Paid Amount:* Rs ${paidAmount.toLocaleString()}\n\n` +
+      `${pendingAmount > 0 ? `*Pending Amount:* Rs ${pendingAmount.toLocaleString()}\n\n` : ''}` +
+      `Thank you for booking with us.`;
+  };
+
+  const sendCustomerBookingWhatsapp = (record: BookingRecord) => {
+    const digits = String(record.mobile || '').replace(/\D/g, '');
+    if (digits.length < 10) return;
+    const phone = digits.length > 10 ? digits.slice(-10) : digits;
+    const whatsappUrl = `https://wa.me/91${phone}?text=${encodeURIComponent(buildCustomerBookingWhatsappMessage(record))}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
+  const notifyAdminForBooking = (record: BookingRecord) => {
+    const adminWhatsApp = process.env.REACT_APP_ADMIN_WHATSAPP || '7369024654';
+    const checkinDate = new Date(record.checkinDate).toLocaleDateString('en-IN');
+    const checkoutDate = new Date(record.checkoutDate).toLocaleDateString('en-IN');
+    const finalAmount = Number(record.finalAmount ?? record.totalAmount ?? 0);
+    const paidAmount = Number(record.paymentAmount ?? 0);
+    const pendingAmount = Math.max(finalAmount - paidAmount, 0);
+    const message = `*Admin Booking Alert*\n\n` +
+      `${record.bookingCode ? `*Code:* ${record.bookingCode}\n` : ''}` +
+      `*Name:* ${record.name}\n` +
+      `*Mobile:* ${record.mobile}\n` +
+      `*Purpose:* ${getRecordPurposeLabel(record)}\n` +
+      `*Check-in:* ${checkinDate}\n` +
+      `*Check-out:* ${checkoutDate}\n` +
+      `*Final:* Rs ${finalAmount}\n` +
+      `*Paid:* Rs ${paidAmount}\n` +
+      `*Pending:* Rs ${pendingAmount}`;
+    const adminWhatsappUrl = `https://wa.me/91${adminWhatsApp}?text=${encodeURIComponent(message)}`;
+    window.open(adminWhatsappUrl, '_blank');
+  };
+
   const sendOfferMessageToWhatsapp = () => {
     if (!selectedOfferBooking) {
       setError('Please select an upcoming booking first');
@@ -3869,6 +3782,9 @@ const AdminPanelPage: React.FC<{
       setError('');
       const approval = await submitPaymentApprovalDecision(record._id, 'approve', adminToken);
       applyApprovalStateToRecord(record._id, approval);
+      if (approval.adminApproved) {
+        sendCustomerBookingWhatsapp(record);
+      }
     } catch (err: any) {
       setError(err?.message || 'Unable to approve payment');
     }
@@ -4773,6 +4689,18 @@ const AdminPanelPage: React.FC<{
             >
               Send To WhatsApp
             </button>
+            <button
+              onClick={() => {
+                if (!selectedOfferBooking) {
+                  setError('Please select an upcoming booking first');
+                  return;
+                }
+                notifyAdminForBooking(selectedOfferBooking);
+              }}
+              style={{ border: 'none', borderRadius: '8px', padding: '10px 12px', background: '#ea580c', color: 'white', cursor: 'pointer', fontWeight: 700 }}
+            >
+              Notify Admin
+            </button>
           </div>
         </div>
 
@@ -5222,9 +5150,17 @@ style.textContent = `
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
   }
+  .compact-back-btn,
+  .nav-back-btn {
+    font-size: 0.92rem !important;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
 `;
 document.head.appendChild(style);
 export default App;
+
+
 
 
 
