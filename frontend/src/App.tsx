@@ -136,6 +136,62 @@ const submitPaymentApprovalDecision = async (
   return toPaymentApprovalState(result?.approval || result?.booking || {});
 };
 
+const rejectPaymentRequestByUser = async (
+  bookingId: string,
+  bookingCode: string,
+  mobile: string,
+  rejectionReason = 'Rejected by user from back to payment'
+) => {
+  const requestCandidates = [
+    {
+      path: `/bookings/${bookingId}/payment-approval`,
+      method: 'PATCH' as const,
+      body: { bookingCode, mobile, action: 'reject', rejectionReason, source: 'user-back-to-payment' }
+    },
+    {
+      path: `/bookings/${bookingId}/payment-request/reject`,
+      method: 'POST' as const,
+      body: { bookingCode, mobile, action: 'reject', rejectionReason }
+    },
+    {
+      path: `/bookings/${bookingId}/payment-request/cancel`,
+      method: 'POST' as const,
+      body: { bookingCode, mobile, action: 'reject', rejectionReason }
+    },
+    {
+      path: `/bookings/${bookingId}/payment-request`,
+      method: 'PATCH' as const,
+      body: { bookingCode, mobile, action: 'reject', rejectionReason }
+    }
+  ];
+
+  for (const candidate of requestCandidates) {
+    const response = await apiFetch(candidate.path, {
+      method: candidate.method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(candidate.body)
+    });
+    const result = await parseJsonSafe(response);
+
+    if (response.ok) {
+      return toPaymentApprovalState(result?.approval || result?.booking || {
+        userMarked: false,
+        adminApproved: false,
+        adminRejected: true,
+        rejectionReason
+      });
+    }
+
+    if (response.status === 404 || response.status === 405 || response.status === 401 || response.status === 403) {
+      continue;
+    }
+
+    throw new Error(result?.error || result?.message || 'Unable to reject payment request');
+  }
+
+  throw new Error('Unable to sync rejection with server. Please try again.');
+};
+
 interface BookingData {
   bookingCode?: string;
   name: string;
@@ -189,13 +245,77 @@ interface PendingPaymentSession {
   pendingAmount: number;
 }
 
+const USER_FLOW_STORAGE_KEY = 'publicUserFlowState';
+const ALL_PAGES: Page[] = ['login', 'booking', 'summary', 'payment', 'approval-waiting', 'confirmation', 'pending-login', 'pending-payment', 'admin-login', 'admin-panel'];
+
+const isValidPage = (value: unknown): value is Page => {
+  return typeof value === 'string' && ALL_PAGES.includes(value as Page);
+};
+
+const defaultBookingData: BookingData = {
+  bookingCode: '',
+  name: '',
+  purpose: 'stay',
+  gender: '',
+  email: '',
+  mobile: '',
+  checkinDate: '',
+  checkoutDate: '',
+  paymentAmount: 1000,
+  paymentType: 'advance',
+  totalAmount: 3500,
+  customAmount: 1000,
+  includeSecurityDeposit: true,
+  whatsappNotification: true,
+  profilePhoto: null
+};
+
+type PersistedUserFlow = {
+  currentPage?: Page;
+  saveError?: string;
+  pendingPaymentSession?: PendingPaymentSession | null;
+  approvalWaitingBooking?: { id: string; code: string; mobile: string } | null;
+  approvalWaitingStatus?: PaymentApprovalState | null;
+  approvalWaitingContext?: 'booking' | 'pending-payment';
+  bookingData?: BookingData;
+};
+
+const readPersistedUserFlow = (): PersistedUserFlow => {
+  try {
+    const raw = window.sessionStorage.getItem(USER_FLOW_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
 const App: React.FC = () => {
-  const [currentPage, setCurrentPage] = useState<Page>('login');
-  const [saveError, setSaveError] = useState<string>('');
-  const [pendingPaymentSession, setPendingPaymentSession] = useState<PendingPaymentSession | null>(null);
-  const [approvalWaitingBooking, setApprovalWaitingBooking] = useState<{ id: string; code: string; mobile: string } | null>(null);
-  const [approvalWaitingStatus, setApprovalWaitingStatus] = useState<PaymentApprovalState | null>(null);
-  const [approvalWaitingContext, setApprovalWaitingContext] = useState<'booking' | 'pending-payment'>('booking');
+  const [currentPage, setCurrentPage] = useState<Page>(() => {
+    const persisted = readPersistedUserFlow();
+    return isValidPage(persisted.currentPage) ? persisted.currentPage : 'login';
+  });
+  const [saveError, setSaveError] = useState<string>(() => {
+    const persisted = readPersistedUserFlow();
+    return typeof persisted.saveError === 'string' ? persisted.saveError : '';
+  });
+  const [pendingPaymentSession, setPendingPaymentSession] = useState<PendingPaymentSession | null>(() => {
+    const persisted = readPersistedUserFlow();
+    return persisted.pendingPaymentSession || null;
+  });
+  const [approvalWaitingBooking, setApprovalWaitingBooking] = useState<{ id: string; code: string; mobile: string } | null>(() => {
+    const persisted = readPersistedUserFlow();
+    return persisted.approvalWaitingBooking || null;
+  });
+  const [approvalWaitingStatus, setApprovalWaitingStatus] = useState<PaymentApprovalState | null>(() => {
+    const persisted = readPersistedUserFlow();
+    return persisted.approvalWaitingStatus || null;
+  });
+  const [approvalWaitingContext, setApprovalWaitingContext] = useState<'booking' | 'pending-payment'>(() => {
+    const persisted = readPersistedUserFlow();
+    return persisted.approvalWaitingContext === 'pending-payment' ? 'pending-payment' : 'booking';
+  });
   const [adminToken, setAdminToken] = useState<string>(() => {
     try {
       return window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || '';
@@ -228,23 +348,30 @@ const App: React.FC = () => {
       return DEFAULT_HALL_IMAGES;
     }
   });
-  const [bookingData, setBookingData] = useState<BookingData>({
-    bookingCode: '',
-    name: '',
-    purpose: 'stay',
-    gender: '',
-    email: '',
-    mobile: '',
-    checkinDate: '',
-    checkoutDate: '',
-    paymentAmount: 1000,
-    paymentType: 'advance',
-    totalAmount: 3500,
-    customAmount: 1000,
-    includeSecurityDeposit: true,
-    whatsappNotification: true,
-    profilePhoto: null
+  const [bookingData, setBookingData] = useState<BookingData>(() => {
+    const persisted = readPersistedUserFlow();
+    return {
+      ...defaultBookingData,
+      ...(persisted.bookingData || {})
+    };
   });
+
+  React.useEffect(() => {
+    try {
+      const payload: PersistedUserFlow = {
+        currentPage,
+        saveError,
+        pendingPaymentSession,
+        approvalWaitingBooking,
+        approvalWaitingStatus,
+        approvalWaitingContext,
+        bookingData
+      };
+      window.sessionStorage.setItem(USER_FLOW_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore storage errors
+    }
+  }, [currentPage, saveError, pendingPaymentSession, approvalWaitingBooking, approvalWaitingStatus, approvalWaitingContext, bookingData]);
 
   const saveBookingToMongo = async () => {
     setSaveError('');
@@ -399,6 +526,30 @@ const App: React.FC = () => {
     setCurrentPage('approval-waiting');
   };
 
+  const handleBackToPaymentFromApproval = async () => {
+    const hasApprovalRequest = Boolean(approvalWaitingBooking?.id);
+    const isPending = !approvalWaitingStatus?.adminApproved && !approvalWaitingStatus?.adminRejected;
+
+    if (hasApprovalRequest && isPending && approvalWaitingBooking) {
+      const rejectionReason = 'Payment request rejected by user from Back to Payment';
+      try {
+        const rejectedStatus = await rejectPaymentRequestByUser(
+          approvalWaitingBooking.id,
+          approvalWaitingBooking.code,
+          approvalWaitingBooking.mobile,
+          rejectionReason
+        );
+        setApprovalWaitingStatus(rejectedStatus);
+      } catch (error: any) {
+        alert(error?.message || 'Unable to reject payment request on server');
+        return;
+      }
+      alert('Payment request rejected and synced with admin panel.');
+    }
+
+    setCurrentPage(approvalWaitingContext === 'pending-payment' ? 'pending-payment' : 'payment');
+  };
+
   const renderPage = () => {
     switch (currentPage) {
       case 'login':
@@ -462,7 +613,7 @@ const App: React.FC = () => {
             onRefresh={() => {
               void refreshApprovalStatus();
             }}
-            onBackToPayment={() => setCurrentPage(approvalWaitingContext === 'pending-payment' ? 'pending-payment' : 'payment')}
+            onBackToPayment={handleBackToPaymentFromApproval}
           />
         );
       case 'confirmation':
@@ -472,7 +623,7 @@ const App: React.FC = () => {
           setApprovalWaitingBooking(null);
           setApprovalWaitingStatus(null);
           setApprovalWaitingContext('booking');
-          setBookingData({ bookingCode: '', name: '', purpose: 'stay', gender: '', email: '', mobile: '', checkinDate: '', checkoutDate: '', paymentAmount: 1000, paymentType: 'advance', totalAmount: 3500, customAmount: 1000, includeSecurityDeposit: true, whatsappNotification: true, profilePhoto: null });
+          setBookingData({ ...defaultBookingData });
         }} />;
       case 'admin-login':
         return (
@@ -3020,7 +3171,7 @@ const ConfirmationPage: React.FC<{
           onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
           onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
         >
-          Make New Booking
+          Book Again
         </button>
       </div>
     </div>
