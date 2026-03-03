@@ -11,6 +11,7 @@ const paymentController_1 = __importDefault(require("../controllers/paymentContr
 const qrController_1 = __importDefault(require("../controllers/qrController"));
 const settingsController_1 = __importDefault(require("../controllers/settingsController"));
 const auth_1 = require("../middleware/auth");
+const adminAuth_1 = require("../middleware/adminAuth");
 const router = (0, express_1.Router)();
 const upload = (0, multer_1.default)({ storage: multer_1.default.memoryStorage() });
 router.get('/health', (req, res) => {
@@ -19,6 +20,8 @@ router.get('/health', (req, res) => {
 router.post('/auth/register', authController_1.default.registerUser);
 router.post('/auth/login', authController_1.default.loginUser);
 router.get('/settings/admin-login', settingsController_1.default.getAdminLoginSettings);
+router.get('/settings/ui-assets', settingsController_1.default.getUiAssets);
+router.patch('/settings/ui-assets', adminAuth_1.requireAdminAuth, settingsController_1.default.updateUiAssets);
 router.get('/bookings/available-dates', bookingController_1.default.getAvailableDates);
 router.get('/bookings', bookingController_1.default.getAllBookings);
 router.post('/bookings/public', bookingController_1.default.createPublicBooking);

@@ -6,6 +6,7 @@ import PaymentController from '../controllers/paymentController';
 import QRController from '../controllers/qrController';
 import SettingsController from '../controllers/settingsController';
 import { authenticateToken } from '../middleware/auth';
+import { requireAdminAuth } from '../middleware/adminAuth';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -19,6 +20,8 @@ router.get('/health', (req, res) => {
 router.post('/auth/register', AuthController.registerUser);
 router.post('/auth/login', AuthController.loginUser);
 router.get('/settings/admin-login', SettingsController.getAdminLoginSettings);
+router.get('/settings/ui-assets', SettingsController.getUiAssets);
+router.patch('/settings/ui-assets', requireAdminAuth, SettingsController.updateUiAssets);
 
 // Booking routes
 router.get('/bookings/available-dates', BookingController.getAvailableDates);

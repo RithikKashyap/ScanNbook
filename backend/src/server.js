@@ -161,8 +161,8 @@ app.use(cors({
 
 app.options('*', cors());
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 mongoose.connect(process.env.DATABASE_URL || 'mongodb://localhost:27017/qr-booking-system', {
     useNewUrlParser: true,
@@ -219,6 +219,27 @@ const bookingDeletionLogSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const BookingDeletionLog = mongoose.models.BookingDeletionLog || mongoose.model('BookingDeletionLog', bookingDeletionLogSchema);
+
+const uiAssetSchema = new mongoose.Schema({
+    _id: { type: String, default: 'global' },
+    hallImageUrls: { type: [String], default: [] },
+    adminLogoUrl: { type: String, default: '' }
+}, { timestamps: true });
+
+const UiAsset = mongoose.models.UiAsset || mongoose.model('UiAsset', uiAssetSchema);
+
+const sanitizeUiImageList = (value) => {
+    if (!Array.isArray(value)) return [];
+    const cleaned = value
+        .map((item) => String(item || '').trim())
+        .filter(Boolean);
+    return Array.from(new Set(cleaned)).slice(0, 12);
+};
+
+const normalizeUiAssetPayload = (doc = {}) => ({
+    hallImageUrls: sanitizeUiImageList(doc.hallImageUrls || []),
+    adminLogoUrl: typeof doc.adminLogoUrl === 'string' ? doc.adminLogoUrl : ''
+});
 
 const paymentSchema = new mongoose.Schema({
     bookingId: { type: String, required: true, index: true },
@@ -441,6 +462,57 @@ app.post('/api/auth/admin-login', (req, res) => {
         });
     } catch (error) {
         return res.status(500).json({ message: 'Admin login failed', error: error.message });
+    }
+});
+
+app.get('/api/settings/ui-assets', async (req, res) => {
+    try {
+        const settingsDoc = await UiAsset.findById('global').lean();
+        res.json({
+            message: 'UI assets fetched successfully',
+            settings: normalizeUiAssetPayload(settingsDoc || {})
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Unable to fetch UI assets', error: error.message });
+    }
+});
+
+app.patch('/api/settings/ui-assets', requireAdminAuth, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const hasHallImageUrls = Object.prototype.hasOwnProperty.call(body, 'hallImageUrls');
+        const hasAdminLogoUrl = Object.prototype.hasOwnProperty.call(body, 'adminLogoUrl');
+
+        if (!hasHallImageUrls && !hasAdminLogoUrl) {
+            return res.status(400).json({ message: 'hallImageUrls or adminLogoUrl is required' });
+        }
+        if (hasHallImageUrls && !Array.isArray(body.hallImageUrls)) {
+            return res.status(400).json({ message: 'hallImageUrls must be an array' });
+        }
+        if (hasAdminLogoUrl && body.adminLogoUrl !== null && typeof body.adminLogoUrl !== 'string') {
+            return res.status(400).json({ message: 'adminLogoUrl must be a string' });
+        }
+
+        const updatePayload = {};
+        if (hasHallImageUrls) {
+            updatePayload.hallImageUrls = sanitizeUiImageList(body.hallImageUrls);
+        }
+        if (hasAdminLogoUrl) {
+            updatePayload.adminLogoUrl = typeof body.adminLogoUrl === 'string' ? body.adminLogoUrl.trim() : '';
+        }
+
+        const updated = await UiAsset.findByIdAndUpdate(
+            'global',
+            { $set: updatePayload },
+            { new: true, upsert: true, setDefaultsOnInsert: true }
+        ).lean();
+
+        res.json({
+            message: 'UI assets updated successfully',
+            settings: normalizeUiAssetPayload(updated || {})
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Unable to update UI assets', error: error.message });
     }
 });
 

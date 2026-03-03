@@ -11,15 +11,26 @@ const index_1 = __importDefault(require("./routes/index"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',');
 app.use((0, cors_1.default)({
-    origin: ['http://localhost:3000', 'http://localhost:3100', 'http://127.0.0.1:3000', 'http://127.0.0.1:3100'],
+    origin: function (origin, callback) {
+        if (!origin)
+            return callback(null, true);
+        if (allowedOrigins.includes(origin)) {
+            callback(null, true);
+        }
+        else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with']
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express_1.default.json({ limit: '10mb' }));
-app.use(express_1.default.urlencoded({ extended: true, limit: '10mb' }));
-mongoose_1.default.connect(process.env.DATABASE_URL || 'mongodb://localhost:27017/qr-booking-system', {
+app.options('*', (0, cors_1.default)());
+app.use(express_1.default.json({ limit: '25mb' }));
+app.use(express_1.default.urlencoded({ extended: true, limit: '25mb' }));
+mongoose_1.default.connect(process.env.DATABASE_URL || 'mongodb+srv://scannbook:Rithik8000@cluster0.wxdm1xh.mongodb.net/?appName=Cluster0', {
     useNewUrlParser: true,
     useUnifiedTopology: true,
 })
@@ -27,7 +38,7 @@ mongoose_1.default.connect(process.env.DATABASE_URL || 'mongodb://localhost:2701
     console.log('✅ Connected to MongoDB database');
 })
     .catch((err) => {
-    console.error('❌ Database connection error:', err);
+    console.error(' Database connection error:', err);
     process.exit(1);
 });
 app.use('/api', index_1.default);
@@ -53,15 +64,15 @@ app.use('*', (req, res) => {
     });
 });
 app.use((err, req, res, next) => {
-    console.error('❌ Server error:', err);
+    console.error(' Server error:', err);
     res.status(500).json({
         message: 'Internal server error',
-        error: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+        error: process.env.NODE_ENV === 'production' ? err.message : 'Something went wrong'
     });
 });
 app.listen(PORT, () => {
-    console.log(`🚀 Server is running on http://localhost:${PORT}`);
-    console.log(`📚 API documentation available at http://localhost:${PORT}/api/health`);
+    console.log(` Server is running on http://localhost:${PORT}`);
+    console.log(` API documentation available at http://localhost:${PORT}/api/health`);
 });
 exports.default = app;
 //# sourceMappingURL=index.js.map

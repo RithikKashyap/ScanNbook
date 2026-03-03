@@ -38,8 +38,8 @@ app.use(cors({
 app.options('*', cors());
 
 // Middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // Database connection
 mongoose.connect(process.env.DATABASE_URL || 'mongodb+srv://scannbook:Rithik8000@cluster0.wxdm1xh.mongodb.net/?appName=Cluster0', {

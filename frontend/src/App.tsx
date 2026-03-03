@@ -16,19 +16,6 @@ const API_BASES = (() => {
   }
   return [REMOTE_API_BASE];
 })();
-const DEFAULT_HALL_IMAGE = '/Jharkhand_Kshatriya_Sangh.jpeg';
-const DEFAULT_HALL_IMAGES = [
-  DEFAULT_HALL_IMAGE,
-  '/IMG_0772.jpeg',
-  '/IMG_0783.jpeg',
-  '/IMG_0786.jpeg',
-  '/IMG_0787.jpeg',
-  '/IMG_0792.jpeg',
-  '/IMG_0796.jpeg',
-  '/IMG_0801.jpeg',
-  '/IMG_0803.jpeg',
-  '/IMG_0804.jpeg'
-];
 const HALL_IMAGE_STORAGE_KEY = 'hallRoomImageUrl';
 const HALL_IMAGE_LIST_STORAGE_KEY = 'hallRoomImageUrls';
 const ADMIN_LOGO_STORAGE_KEY = 'adminPanelLogoUrl';
@@ -48,6 +35,51 @@ type PaymentApprovalState = {
 };
 
 type PaymentApprovalMap = Record<string, PaymentApprovalState>;
+
+const normalizeHallImageUrls = (raw: unknown): string[] => {
+  if (!Array.isArray(raw)) return [];
+  const cleaned = raw
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+  return Array.from(new Set(cleaned)).slice(0, 12);
+};
+
+const readHallImagesFromLocalStorage = (): string[] => {
+  try {
+    const listRaw = window.localStorage.getItem(HALL_IMAGE_LIST_STORAGE_KEY);
+    if (listRaw) {
+      const parsed = JSON.parse(listRaw);
+      return normalizeHallImageUrls(parsed);
+    }
+    const singleStored = window.localStorage.getItem(HALL_IMAGE_STORAGE_KEY);
+    if (!singleStored || !singleStored.trim()) return [];
+    return normalizeHallImageUrls([singleStored]);
+  } catch {
+    return [];
+  }
+};
+
+const saveHallImagesToLocalStorage = (imageUrls: string[]) => {
+  try {
+    const next = normalizeHallImageUrls(imageUrls);
+    window.localStorage.setItem(HALL_IMAGE_LIST_STORAGE_KEY, JSON.stringify(next));
+    window.localStorage.setItem(HALL_IMAGE_STORAGE_KEY, next[0] || '');
+  } catch {
+    // ignore storage errors
+  }
+};
+
+const saveAdminLogoToLocalStorage = (logoUrl: string) => {
+  try {
+    if (logoUrl) {
+      window.localStorage.setItem(ADMIN_LOGO_STORAGE_KEY, logoUrl);
+    } else {
+      window.localStorage.removeItem(ADMIN_LOGO_STORAGE_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+};
 
 const parseJsonSafe = async (response: Response) => {
   try {
@@ -241,6 +273,7 @@ interface BookingRecord {
   adminPaymentRejected?: boolean;
   paymentRejectionReason?: string;
   paymentApprovedAt?: string;
+  profilePhoto?: string | null;
 }
 
 interface PendingPaymentSession {
@@ -251,6 +284,17 @@ interface PendingPaymentSession {
   payableTotal: number;
   pendingAmount: number;
 }
+
+type CustomerNotificationTemplate =
+  | 'pending-payment-approved'
+  | 'pending-payment-reminder'
+  | 'partial-payment-received'
+  | 'payment-rejected'
+  | 'booking-confirmation'
+  | 'booking-approved'
+  | 'booking-cancelled'
+  | 'event-reminder'
+  | 'payment-receipt';
 
 const USER_FLOW_STORAGE_KEY = 'publicUserFlowState';
 const ALL_PAGES: Page[] = ['login', 'booking', 'summary', 'payment', 'approval-waiting', 'confirmation', 'booking-details-login', 'pending-login', 'pending-payment', 'admin-login', 'admin-panel'];
@@ -337,24 +381,7 @@ const App: React.FC = () => {
       return false;
     }
   });
-  const [hallImageUrls, setHallImageUrls] = useState<string[]>(() => {
-    try {
-      const listRaw = window.localStorage.getItem(HALL_IMAGE_LIST_STORAGE_KEY);
-      if (listRaw) {
-        const parsed = JSON.parse(listRaw);
-        if (Array.isArray(parsed) && parsed.length) {
-          const stored = parsed.slice(0, 12).filter((item) => typeof item === 'string' && item.trim());
-          return Array.from(new Set([...stored, ...DEFAULT_HALL_IMAGES])).slice(0, 12);
-        }
-      }
-      const singleStored = window.localStorage.getItem(HALL_IMAGE_STORAGE_KEY);
-      if (singleStored === null) return DEFAULT_HALL_IMAGES;
-      if (!singleStored.trim()) return [];
-      return Array.from(new Set([singleStored, ...DEFAULT_HALL_IMAGES])).slice(0, 12);
-    } catch {
-      return DEFAULT_HALL_IMAGES;
-    }
-  });
+  const [hallImageUrls, setHallImageUrls] = useState<string[]>(() => readHallImagesFromLocalStorage());
   const [bookingData, setBookingData] = useState<BookingData>(() => {
     const persisted = readPersistedUserFlow();
     return {
@@ -362,6 +389,27 @@ const App: React.FC = () => {
       ...(persisted.bookingData || {})
     };
   });
+
+  React.useEffect(() => {
+    let isMounted = true;
+    const loadUiAssets = async () => {
+      try {
+        const response = await apiFetch('/settings/ui-assets');
+        const result = await parseJsonSafe(response);
+        if (!response.ok) return;
+        const nextHallImages = normalizeHallImageUrls(result?.settings?.hallImageUrls);
+        if (!isMounted) return;
+        setHallImageUrls(nextHallImages);
+        saveHallImagesToLocalStorage(nextHallImages);
+      } catch {
+        // keep local fallback
+      }
+    };
+    void loadUiAssets();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     try {
@@ -567,6 +615,7 @@ const App: React.FC = () => {
           onNext={() => setCurrentPage('booking')} 
           onBack={() => setCurrentPage('login')}
           onAdminLogin={() => setCurrentPage('admin-login')}
+          onBookingDetails={() => setCurrentPage('booking-details-login')}
           onPendingPaymentLogin={() => setCurrentPage('pending-login')}
         />;
       case 'pending-login':
@@ -608,6 +657,8 @@ const App: React.FC = () => {
         return (
           <PaymentPage 
             amount={bookingData.paymentAmount + (bookingData.includeSecurityDeposit ? 500 : 0)}
+            paymentProof={bookingData.profilePhoto}
+            onPaymentProofChange={(proof) => setBookingData({ ...bookingData, profilePhoto: proof })}
             onSuccess={saveBookingToMongo}
             onBack={() => setCurrentPage('summary')}
           />
@@ -636,6 +687,9 @@ const App: React.FC = () => {
         return (
           <BookingDetailsLookupPage
             onBack={() => setCurrentPage('confirmation')}
+            onPayNow={async (bookingCode, mobile) => {
+              await handlePendingPaymentLogin(bookingCode, mobile);
+            }}
           />
         );
       case 'admin-login':
@@ -697,6 +751,7 @@ const App: React.FC = () => {
           onNext={() => setCurrentPage('booking')} 
           onBack={() => setCurrentPage('login')}
           onAdminLogin={() => setCurrentPage('admin-login')}
+          onBookingDetails={() => setCurrentPage('booking-details-login')}
           onPendingPaymentLogin={() => setCurrentPage('pending-login')}
         />;
     }
@@ -722,8 +777,9 @@ const LoginPage: React.FC<{
   onNext: () => void; 
   onBack: () => void;
   onAdminLogin: () => void;
+  onBookingDetails: () => void;
   onPendingPaymentLogin: () => void;
-}> = ({ bookingData, hallImageUrls, setBookingData, onNext, onBack, onAdminLogin, onPendingPaymentLogin }) => {
+}> = ({ bookingData, hallImageUrls, setBookingData, onNext, onBack, onAdminLogin, onBookingDetails, onPendingPaymentLogin }) => {
   const [isHallImageOpen, setIsHallImageOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   type SettingsTab = 'contact' | 'service' | 'booking' | 'complain' | 'feedback' | 'language';
@@ -745,7 +801,7 @@ const LoginPage: React.FC<{
   const [settingsStatusText, setSettingsStatusText] = useState('');
   const settingsMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState<AppLanguage>('en');
-  const settingItems = ['Admin', 'Language', 'Contact', 'Service', 'Check Date', 'Complain', 'Feedback'];
+  const settingItems = ['Admin', 'Language', 'Contact', 'Service', 'Check Date', 'Booking Detail', 'Pay', 'Complain', 'Feedback'];
   const languageText = {
     en: {
       back: 'Back',
@@ -795,7 +851,7 @@ const LoginPage: React.FC<{
     }
   } as const;
   const t = languageText[selectedLanguage];
-  const hallSlides = hallImageUrls.length ? hallImageUrls : DEFAULT_HALL_IMAGES;
+  const hallSlides = hallImageUrls;
   const [hallSlideIndex, setHallSlideIndex] = useState(0);
   const purposeOptions = ['meeting', 'camp', 'picnic', 'function', 'shaadi', 'engagement', 'reception', 'stay'] as const;
   type PurposeOption = '' | (typeof purposeOptions)[number] | 'other';
@@ -857,6 +913,16 @@ const LoginPage: React.FC<{
     if (item.toLowerCase() === 'admin') {
       setIsSettingsOpen(false);
       onAdminLogin();
+      return;
+    }
+    if (item.toLowerCase() === 'booking detail') {
+      setIsSettingsOpen(false);
+      onBookingDetails();
+      return;
+    }
+    if (item.toLowerCase() === 'pay') {
+      setIsSettingsOpen(false);
+      onPendingPaymentLogin();
       return;
     }
 
@@ -1961,6 +2027,19 @@ const BookingPage: React.FC<{
     return checkoutDate > checkinDate;
   };
 
+  const hasBookedDateInBetween = (checkinDate: string, checkoutDate: string) => {
+    if (!isCheckoutDateAllowed(checkinDate, checkoutDate)) return false;
+    const cursor = new Date(checkinDate);
+    const end = new Date(checkoutDate);
+    cursor.setDate(cursor.getDate() + 1);
+    while (cursor < end) {
+      const dateKey = cursor.toISOString().split('T')[0];
+      if (isDateBooked(dateKey)) return true;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return false;
+  };
+
   React.useEffect(() => {
     const loadBookedDates = async () => {
       setBookingAvailabilityError('');
@@ -2147,15 +2226,15 @@ const BookingPage: React.FC<{
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, marginBottom: '8px', fontSize: '1.05rem' }}>
             Booking Timings
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: '10px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.05rem' }}>
-              <span><strong>Check-in:</strong> 7:30 AM</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.05rem' }}>
-              <span><strong>Check-out Time:</strong> 6:30 AM</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.05rem' }}>
+                <span><strong>Check-in:</strong> 7:30 AM</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.05rem' }}>
+                <span><strong>Check-out Time:</strong> 6:30 AM (on selected check-out date)</span>
+              </div>
             </div>
           </div>
-        </div>
 
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: '14px' }}>
@@ -2211,16 +2290,18 @@ const BookingPage: React.FC<{
                 required
               >
                 <option value="">Choose your check-in date</option>
-                {availableDates.map(date => (
-                  <option key={date} value={date} disabled={isDateBooked(date)}>
+                {availableDates.map(date => {
+                  const isBookedOption = isDateBooked(date);
+                  return (
+                  <option key={date} value={date} disabled={isBookedOption}>
                     {new Date(date).toLocaleDateString('en-US', {
                       weekday: 'long',
                       year: 'numeric',
                       month: 'long',
                       day: 'numeric'
-                    })}
+                    })}{isBookedOption ? ' (Already Booked)' : ''}
                   </option>
-                ))}
+                )})}
               </select>
             </div>
             {bookingData.checkinDate && isDateBooked(bookingData.checkinDate) && (
@@ -2261,6 +2342,10 @@ const BookingPage: React.FC<{
                     alert('Please select check-in date first');
                     return;
                   }
+                  if (hasBookedDateInBetween(bookingData.checkinDate, candidateCheckout)) {
+                    alert('Some dates are already booked');
+                    return;
+                  }
                   if (!isCheckoutDateAllowed(bookingData.checkinDate, candidateCheckout)) {
                     alert('Check-out date must be after check-in date');
                     return;
@@ -2284,7 +2369,11 @@ const BookingPage: React.FC<{
               >
                 <option value="">Choose your check-out date</option>
                 {availableDates.map(date => {
-                  const isDisabled = !bookingData.checkinDate || !isCheckoutDateAllowed(bookingData.checkinDate, date);
+                  const isBookedOption = isDateBooked(date);
+                  const hasBookedInBetween = bookingData.checkinDate
+                    ? hasBookedDateInBetween(bookingData.checkinDate, date)
+                    : false;
+                  const isDisabled = !bookingData.checkinDate || !isCheckoutDateAllowed(bookingData.checkinDate, date) || hasBookedInBetween;
                   return (
                     <option key={date} value={date} disabled={isDisabled}>
                       {new Date(date).toLocaleDateString('en-US', {
@@ -2292,7 +2381,7 @@ const BookingPage: React.FC<{
                         year: 'numeric',
                         month: 'long',
                         day: 'numeric'
-                      })}
+                      })}{hasBookedInBetween ? ' (Already Booked)' : isBookedOption ? ' (Already Booked)' : ''}
                     </option>
                   );
                 })}
@@ -2303,7 +2392,7 @@ const BookingPage: React.FC<{
                 Only dates after {new Date(bookingData.checkinDate).toLocaleDateString('en-US', { 
                   month: 'short', 
                   day: 'numeric' 
-                })} are available for check-out
+                })} are available for check-out. Check-out is valid till 6:30 AM on the selected check-out date.
               </div>
             )}
           </div>
@@ -2705,13 +2794,15 @@ const PaymentSummaryPage: React.FC<{
 // Payment Page
 const PaymentPage: React.FC<{
   amount: number;
+  paymentProof: string | null;
+  onPaymentProofChange: (proof: string | null) => void;
   onSuccess: () => Promise<void> | void;
   onBack: () => void;
-}> = ({ amount, onSuccess, onBack }) => {
+}> = ({ amount, paymentProof, onPaymentProofChange, onSuccess, onBack }) => {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState('');
   const [copyText, setCopyText] = useState<'Copy' | 'Copied'>('Copy');
-  const [proofFileName, setProofFileName] = useState('');
+  const [proofFileName, setProofFileName] = useState(paymentProof ? 'Uploaded Payment Proof' : '');
 
   const upiId = process.env.REACT_APP_UPI_ID || '8709276546@ptsbi';
   const payeeName = process.env.REACT_APP_UPI_NAME || 'Jharkhand Chhatriya Sangh Bhawan';
@@ -2754,9 +2845,36 @@ const PaymentPage: React.FC<{
     const file = event.target.files?.[0];
     if (!file) {
       setProofFileName('');
+      onPaymentProofChange(null);
+      setError('');
       return;
     }
-    setProofFileName(file.name);
+    const isImage = file.type.startsWith('image/');
+    const isPdf = file.type === 'application/pdf';
+    if (!isImage && !isPdf) {
+      setError('Please upload JPG, PNG, or PDF file');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Payment proof should be less than 10MB');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const proofData = String(e.target?.result || '');
+      if (!proofData) {
+        setError('Unable to read payment proof file');
+        return;
+      }
+      onPaymentProofChange(proofData);
+      setProofFileName(file.name);
+      setError('');
+    };
+    reader.onerror = () => {
+      setError('Unable to read payment proof file');
+    };
+    reader.readAsDataURL(file);
   };
 
   return (
@@ -2894,11 +3012,20 @@ const PaymentPage: React.FC<{
         <div style={{ marginBottom: '10px' }}>
           <div style={{ color: '#111827', fontWeight: 500, fontSize: '1.12rem', marginBottom: '8px' }}>Upload Payment Screenshot (Optional)</div>
           <label style={{ display: 'block', border: '2px dashed #bfdbfe', borderRadius: '12px', padding: '18px', textAlign: 'center', color: '#64748b', cursor: 'pointer', background: '#f8fafc' }}>
-            <input type="file" accept=".jpg,.jpeg,.png,.pdf" onChange={handleUploadProof} style={{ display: 'none' }} />
+            <input type="file" accept="image/*,.pdf" onChange={handleUploadProof} style={{ display: 'none' }} />
             <div style={{ fontSize: '1.2rem', marginBottom: '6px' }}>Drop image here or Click to upload file</div>
-            <div style={{ fontSize: '0.92rem' }}>JPG, PNG, or PDF | Max 10MB</div>
+            <div style={{ fontSize: '0.92rem' }}>Any image or PDF | Max 10MB</div>
             {proofFileName && (
               <div style={{ marginTop: '8px', color: '#0f766e', fontWeight: 600 }}>Selected: {proofFileName}</div>
+            )}
+            {paymentProof && paymentProof.startsWith('data:image') && (
+              <div style={{ marginTop: '10px' }}>
+                <img
+                  src={paymentProof}
+                  alt="Uploaded payment proof"
+                  style={{ width: '100%', maxWidth: '220px', maxHeight: '140px', objectFit: 'cover', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+                />
+              </div>
             )}
           </label>
         </div>
@@ -3178,10 +3305,12 @@ const PaymentApprovalWaitingPage: React.FC<{
 
 const BookingDetailsLookupPage: React.FC<{
   onBack: () => void;
-}> = ({ onBack }) => {
+  onPayNow: (bookingCode: string, mobile: string) => Promise<void>;
+}> = ({ onBack, onPayNow }) => {
   const [bookingCode, setBookingCode] = useState('');
   const [mobile, setMobile] = useState('');
   const [loading, setLoading] = useState(false);
+  const [paying, setPaying] = useState(false);
   const [error, setError] = useState('');
   const [record, setRecord] = useState<BookingRecord | null>(null);
 
@@ -3239,6 +3368,26 @@ const BookingDetailsLookupPage: React.FC<{
   const paidAmount = Number(record?.paymentAmount ?? 0);
   const pendingAmount = Math.max(finalAmount - paidAmount, 0);
 
+  const handlePayNow = async () => {
+    if (!record) return;
+    const cleanCode = String(record.bookingCode || bookingCode).replace(/\D/g, '').slice(0, 4);
+    const cleanMobile = String(record.mobile || mobile).replace(/\D/g, '').slice(-10);
+    if (cleanCode.length !== 4 || cleanMobile.length !== 10) {
+      setError('Unable to start payment. Please verify booking details again.');
+      return;
+    }
+
+    try {
+      setPaying(true);
+      setError('');
+      await onPayNow(cleanCode, cleanMobile);
+    } catch (err: any) {
+      setError(err?.message || 'Unable to open pending payment');
+    } finally {
+      setPaying(false);
+    }
+  };
+
   return (
     <div className="page-center" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
       <div className="surface-card" style={{ background: 'rgba(255,255,255,0.96)', borderRadius: '20px', padding: '28px', maxWidth: '560px', width: '100%', boxShadow: '0 20px 40px rgba(0,0,0,0.12)' }}>
@@ -3295,7 +3444,16 @@ const BookingDetailsLookupPage: React.FC<{
           </div>
         )}
 
-        <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-start' }}>
+        <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-start', gap: '10px', flexWrap: 'wrap' }}>
+          {record && pendingAmount > 0 && (
+            <button
+              onClick={handlePayNow}
+              disabled={paying}
+              style={{ border: 'none', borderRadius: '10px', padding: '10px 14px', background: '#16a34a', color: '#fff', fontWeight: 700, cursor: paying ? 'not-allowed' : 'pointer', opacity: paying ? 0.85 : 1 }}
+            >
+              {paying ? 'Opening Payment...' : `Pay Pending Rs ${pendingAmount}`}
+            </button>
+          )}
           <button
             onClick={onBack}
             style={{ border: 'none', borderRadius: '10px', padding: '10px 14px', background: '#64748b', color: '#fff', fontWeight: 700, cursor: 'pointer' }}
@@ -3953,6 +4111,7 @@ const AdminPanelPage: React.FC<{
     total: '',
     paymentStatus: ''
   });
+  const [notificationTemplateById, setNotificationTemplateById] = useState<Record<string, CustomerNotificationTemplate>>({});
   const [selectedHallImageIndex, setSelectedHallImageIndex] = useState(0);
   const [adminLogoUrl, setAdminLogoUrl] = useState<string>(() => getStoredString(ADMIN_LOGO_STORAGE_KEY, ''));
   type AdminContact = { name: string; profileType: string; contact: string };
@@ -4129,6 +4288,62 @@ const AdminPanelPage: React.FC<{
     throw new Error(fallbackMessage);
   };
 
+  const persistUiAssets = async (updates: { hallImageUrls?: string[]; adminLogoUrl?: string }) => {
+    const applyLocalFallback = () => {
+      if (Object.prototype.hasOwnProperty.call(updates, 'hallImageUrls')) {
+        const nextHallImages = normalizeHallImageUrls(updates.hallImageUrls ?? []);
+        setHallImageUrls(nextHallImages);
+        saveHallImagesToLocalStorage(nextHallImages);
+      }
+      if (Object.prototype.hasOwnProperty.call(updates, 'adminLogoUrl')) {
+        const nextLogo = updates.adminLogoUrl || '';
+        setAdminLogoUrl(nextLogo);
+        saveAdminLogoToLocalStorage(nextLogo);
+      }
+    };
+
+    let response: Response;
+    let result: any;
+    try {
+      response = await apiFetch('/settings/ui-assets', {
+        method: 'PATCH',
+        headers: withAdminAuth(adminToken, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify(updates)
+      });
+      result = await parseJsonSafe(response);
+    } catch {
+      applyLocalFallback();
+      return;
+    }
+
+    if (!response.ok) {
+      if (response.status === 404 || response.status === 405) {
+        applyLocalFallback();
+        return;
+      }
+      handleUnauthorizedAdminResponse(
+        response,
+        result?.error || result?.message || 'Unable to update image settings'
+      );
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'hallImageUrls')) {
+      const nextHallImages = normalizeHallImageUrls(
+        result?.settings?.hallImageUrls ?? updates.hallImageUrls ?? []
+      );
+      setHallImageUrls(nextHallImages);
+      saveHallImagesToLocalStorage(nextHallImages);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'adminLogoUrl')) {
+      const nextLogo = typeof result?.settings?.adminLogoUrl === 'string'
+        ? result.settings.adminLogoUrl
+        : (updates.adminLogoUrl || '');
+      setAdminLogoUrl(nextLogo);
+      saveAdminLogoToLocalStorage(nextLogo);
+    }
+  };
+
   const loadRecords = React.useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
     if (!silent) {
@@ -4272,6 +4487,9 @@ const AdminPanelPage: React.FC<{
     selectedOfferBooking?.bookingPurpose === 'other'
       ? (selectedOfferBooking?.bookingPurposeOther || 'Other')
       : (selectedOfferBooking?.bookingPurpose || 'Standard');
+  const editingRecord = editingId ? records.find((row) => row._id === editingId) || null : null;
+  const editingHeaderName = (editForm.name || editingRecord?.name || 'Guest').trim() || 'Guest';
+  const editingHeaderCode = String(editingRecord?.bookingCode || '').trim();
   const upcomingTickerText = upcomingBookings.length
     ? (() => {
         const row = upcomingBookings[0];
@@ -4313,14 +4531,14 @@ const AdminPanelPage: React.FC<{
       `Guest Name: ${offerForm.name}\n` +
       `Check-in / Check-out: ${offerForm.checkin} – ${offerForm.checkout}\n` +
       `Hall/Room Purpose: ${offerForm.roomType}\n\n` +
-      `Original Amount: ?${offerForm.original || '0'}\n` +
-      `Discount Applied: ?${offerForm.discount || '0'}\n` +
-      `Final Payable Amount: ?${offerForm.total || '0'}\n\n` +
-      `Payment Status: ${offerForm.paymentStatus}${offerForm.paymentStatus.toLowerCase().includes('fully') ? ' ?' : ''}\n\n` +
-      `You have received a discount of ?${offerForm.discount || '0'}. The final payable amount has been updated accordingly.\n\n` +
+      `Original Amount: Rs ${offerForm.original || '0'}\n` +
+      `Discount Applied: Rs ${offerForm.discount || '0'}\n` +
+      `Final Payable Amount: Rs ${offerForm.total || '0'}\n\n` +
+      `Payment Status: ${offerForm.paymentStatus}\n\n` +
+      `You have received a discount of Rs ${offerForm.discount || '0'}. The final payable amount has been updated accordingly.\n\n` +
       `Important Payment Information\n\n` +
-      `Kindly ensure that any pending balance is cleared prior to check-in, along with a refundable security deposit of ?500.\n\n` +
-      `Additionally, a separate ?500 electricity security deposit will be collected at the time of check-in. This amount will be refunded at check-out after adjustment against actual electricity consumption, if applicable.\n\n` +
+      `Kindly ensure that any pending balance is cleared prior to check-in, along with a refundable security deposit of Rs 500.\n\n` +
+      `Additionally, a separate Rs 500 electricity security deposit will be collected at the time of check-in. This amount will be refunded at check-out after adjustment against actual electricity consumption, if applicable.\n\n` +
       `Please disregard this notice if the required payments have already been completed.`
     : '';
 
@@ -4339,7 +4557,7 @@ const AdminPanelPage: React.FC<{
   };
 
   const selectedHallImageUrl = hallImageUrls[selectedHallImageIndex] || '';
-  const isCustomHallImage = Boolean(selectedHallImageUrl) && selectedHallImageUrl !== DEFAULT_HALL_IMAGE;
+  const isCustomHallImage = Boolean(selectedHallImageUrl);
 
   const handleHallImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -4360,7 +4578,11 @@ const AdminPanelPage: React.FC<{
       const nextList = hallImageUrls.length
         ? hallImageUrls.map((item, idx) => (idx === selectedHallImageIndex ? nextUrl : item))
         : [nextUrl];
-      setHallImageUrls(nextList.slice(0, 12));
+      const sanitizedNextList = normalizeHallImageUrls(nextList);
+      setHallImageUrls(sanitizedNextList);
+      void persistUiAssets({ hallImageUrls: sanitizedNextList }).catch((err: any) => {
+        setError(err?.message || 'Unable to save hall images');
+      });
       setError('');
     };
     reader.readAsDataURL(file);
@@ -4397,16 +4619,23 @@ const AdminPanelPage: React.FC<{
       )
     );
     const next = [...hallImageUrls, ...encoded.filter(Boolean)].slice(0, 12);
-    setHallImageUrls(next);
-    setSelectedHallImageIndex(Math.max(next.length - 1, 0));
+    const sanitizedNext = normalizeHallImageUrls(next);
+    setHallImageUrls(sanitizedNext);
+    void persistUiAssets({ hallImageUrls: sanitizedNext }).catch((err: any) => {
+      setError(err?.message || 'Unable to save hall images');
+    });
+    setSelectedHallImageIndex(Math.max(sanitizedNext.length - 1, 0));
     setError('');
   };
 
   const removeSelectedHallPhoto = () => {
     if (!hallImageUrls.length) return;
-    const next = hallImageUrls.filter((_, idx) => idx !== selectedHallImageIndex);
+    const next = normalizeHallImageUrls(hallImageUrls.filter((_, idx) => idx !== selectedHallImageIndex));
     setHallImageUrls(next);
     setSelectedHallImageIndex((prev) => Math.max(0, Math.min(prev, next.length - 1)));
+    void persistUiAssets({ hallImageUrls: next }).catch((err: any) => {
+      setError(err?.message || 'Unable to save hall images');
+    });
   };
 
   const getRecordPurposeLabel = (record: BookingRecord) => {
@@ -4416,7 +4645,7 @@ const AdminPanelPage: React.FC<{
     return record.bookingPurpose || 'Function';
   };
 
-  const buildCustomerBookingWhatsappMessage = (record: BookingRecord) => {
+  const getRecordDateLabels = (record: BookingRecord) => {
     const checkinDate = new Date(record.checkinDate).toLocaleDateString('en-US', {
       weekday: 'long',
       month: 'long',
@@ -4429,31 +4658,224 @@ const AdminPanelPage: React.FC<{
       day: 'numeric',
       year: 'numeric'
     });
+    return { checkinDate, checkoutDate };
+  };
+
+  const getRecordAmounts = (record: BookingRecord) => {
     const finalAmount = Number(record.finalAmount ?? record.totalAmount ?? 0);
     const paidAmount = Number(record.paymentAmount ?? 0);
     const pendingAmount = Math.max(finalAmount - paidAmount, 0);
-    return `*Booking Confirmed*\n\n` +
-      `Dear ${record.name},\n` +
-      `Your payment is approved by admin.\n\n` +
-      `*Booking Details*\n\n` +
-      `${record.bookingCode ? `*Allotment No.:* ${record.bookingCode}\n\n` : ''}` +
-      `*Name:* ${record.name}\n\n` +
-      `*Mobile:* ${record.mobile}\n\n` +
-      `*Purpose:* ${getRecordPurposeLabel(record)}\n\n` +
-      `*Check-in:* ${checkinDate}\n\n` +
-      `*Check-out:* ${checkoutDate}\n\n` +
-      `*Final Amount:* Rs ${finalAmount.toLocaleString()}\n\n` +
-      `*Paid Amount:* Rs ${paidAmount.toLocaleString()}\n\n` +
-      `${pendingAmount > 0 ? `*Pending Amount:* Rs ${pendingAmount.toLocaleString()}\n\n` : ''}` +
-      `Thank you for booking with us.`;
+    return { finalAmount, paidAmount, pendingAmount };
+  };
+
+  const getCustomerPhoneForWhatsapp = (record: BookingRecord): string | null => {
+    const digits = String(record.mobile || '').replace(/\D/g, '');
+    if (digits.length < 10) return null;
+    return digits.length > 10 ? digits.slice(-10) : digits;
+  };
+
+  const openCustomerWhatsappMessage = (record: BookingRecord, message: string) => {
+    const phone = getCustomerPhoneForWhatsapp(record);
+    if (!phone) {
+      setError('Valid mobile number not available for this booking');
+      return;
+    }
+    const whatsappUrl = `https://wa.me/91${phone}?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
+  const buildPendingPaymentApprovedMessage = (record: BookingRecord) => {
+    const { checkinDate, checkoutDate } = getRecordDateLabels(record);
+    const { finalAmount, paidAmount, pendingAmount } = getRecordAmounts(record);
+    return `Dear ${record.name},\n\n` +
+      `Your pending payment has been successfully received and approved by the admin.\n\n` +
+      `Booking Details\n\n` +
+      `${record.bookingCode ? `Allotment No.: ${record.bookingCode}\n` : ''}` +
+      `Name: ${record.name}\n` +
+      `Mobile: ${record.mobile}\n` +
+      `Purpose: ${getRecordPurposeLabel(record)}\n\n` +
+      `Check-in: ${checkinDate}\n` +
+      `Check-out: ${checkoutDate}\n\n` +
+      `Final Amount: Rs ${finalAmount.toLocaleString()}\n` +
+      `Paid Amount: Rs ${paidAmount.toLocaleString()}\n` +
+      `Pending Amount: Rs ${pendingAmount.toLocaleString()}\n\n` +
+      `Thank you for completing the payment. Your booking is now fully confirmed.`;
+  };
+
+  const buildPendingPaymentReminderMessage = (record: BookingRecord) => {
+    const { checkinDate, checkoutDate } = getRecordDateLabels(record);
+    const { finalAmount, paidAmount, pendingAmount } = getRecordAmounts(record);
+    return `Dear ${record.name},\n\n` +
+      `This is a reminder that your booking payment is still pending. Kindly complete the payment to confirm your booking.\n\n` +
+      `Booking Details\n\n` +
+      `${record.bookingCode ? `Allotment No.: ${record.bookingCode}\n` : ''}` +
+      `Name: ${record.name}\n` +
+      `Mobile: ${record.mobile}\n` +
+      `Purpose: ${getRecordPurposeLabel(record)}\n\n` +
+      `Check-in: ${checkinDate}\n` +
+      `Check-out: ${checkoutDate}\n\n` +
+      `Final Amount: Rs ${finalAmount.toLocaleString()}\n` +
+      `Paid Amount: Rs ${paidAmount.toLocaleString()}\n` +
+      `Pending Amount: Rs ${pendingAmount.toLocaleString()}\n\n` +
+      `Please complete the remaining payment at the earliest to avoid cancellation.`;
+  };
+
+  const buildPartialPaymentReceivedMessage = (record: BookingRecord) => {
+    const { checkinDate, checkoutDate } = getRecordDateLabels(record);
+    const { finalAmount, paidAmount, pendingAmount } = getRecordAmounts(record);
+    return `Dear ${record.name},\n\n` +
+      `Your partial payment has been successfully received. The remaining amount is still pending.\n\n` +
+      `Booking Details\n\n` +
+      `${record.bookingCode ? `Allotment No.: ${record.bookingCode}\n` : ''}` +
+      `Name: ${record.name}\n` +
+      `Mobile: ${record.mobile}\n` +
+      `Purpose: ${getRecordPurposeLabel(record)}\n\n` +
+      `Check-in: ${checkinDate}\n` +
+      `Check-out: ${checkoutDate}\n\n` +
+      `Final Amount: Rs ${finalAmount.toLocaleString()}\n` +
+      `Paid Amount: Rs ${paidAmount.toLocaleString()}\n` +
+      `Pending Amount: Rs ${pendingAmount.toLocaleString()}\n\n` +
+      `Kindly complete the remaining payment to confirm your booking.`;
+  };
+
+  const buildPaymentRejectedMessage = (record: BookingRecord) => {
+    const { checkinDate, checkoutDate } = getRecordDateLabels(record);
+    const { finalAmount } = getRecordAmounts(record);
+    return `Dear ${record.name},\n\n` +
+      `Your payment could not be approved by the admin. Please review the payment details or contact the admin for assistance.\n\n` +
+      `Booking Details\n\n` +
+      `${record.bookingCode ? `Allotment No.: ${record.bookingCode}\n` : ''}` +
+      `Name: ${record.name}\n` +
+      `Mobile: ${record.mobile}\n` +
+      `Purpose: ${getRecordPurposeLabel(record)}\n\n` +
+      `Check-in: ${checkinDate}\n` +
+      `Check-out: ${checkoutDate}\n\n` +
+      `Final Amount: Rs ${finalAmount.toLocaleString()}\n\n` +
+      `Please complete the payment again to confirm your booking.`;
+  };
+
+  const buildBookingConfirmationMessage = (record: BookingRecord) => {
+    const { checkinDate, checkoutDate } = getRecordDateLabels(record);
+    const { finalAmount } = getRecordAmounts(record);
+    return `Dear ${record.name},\n\n` +
+      `Your booking request has been successfully submitted and is currently under review by the admin.\n\n` +
+      `Booking Details\n\n` +
+      `${record.bookingCode ? `Allotment No.: ${record.bookingCode}\n` : ''}` +
+      `Name: ${record.name}\n` +
+      `Mobile: ${record.mobile}\n` +
+      `Purpose: ${getRecordPurposeLabel(record)}\n\n` +
+      `Check-in: ${checkinDate}\n` +
+      `Check-out: ${checkoutDate}\n\n` +
+      `Final Amount: Rs ${finalAmount.toLocaleString()}\n\n` +
+      `You will receive a notification once the admin approves your booking.`;
+  };
+
+  const buildBookingApprovedMessage = (record: BookingRecord) => {
+    const { checkinDate, checkoutDate } = getRecordDateLabels(record);
+    const { finalAmount } = getRecordAmounts(record);
+    return `Dear ${record.name},\n\n` +
+      `Your booking has been approved by the admin.\n\n` +
+      `Booking Details\n\n` +
+      `${record.bookingCode ? `Allotment No.: ${record.bookingCode}\n` : ''}` +
+      `Name: ${record.name}\n` +
+      `Mobile: ${record.mobile}\n` +
+      `Purpose: ${getRecordPurposeLabel(record)}\n\n` +
+      `Check-in: ${checkinDate}\n` +
+      `Check-out: ${checkoutDate}\n\n` +
+      `Final Amount: Rs ${finalAmount.toLocaleString()}\n\n` +
+      `Please complete the payment to confirm your booking.`;
+  };
+
+  const buildBookingCancelledMessage = (record: BookingRecord) => {
+    const { checkinDate, checkoutDate } = getRecordDateLabels(record);
+    return `Dear ${record.name},\n\n` +
+      `Your booking has been cancelled.\n\n` +
+      `Booking Details\n\n` +
+      `${record.bookingCode ? `Allotment No.: ${record.bookingCode}\n` : ''}` +
+      `Name: ${record.name}\n` +
+      `Mobile: ${record.mobile}\n\n` +
+      `Check-in: ${checkinDate}\n` +
+      `Check-out: ${checkoutDate}\n\n` +
+      `If you believe this was done in error, please contact the admin.`;
+  };
+
+  const buildEventReminderMessage = (record: BookingRecord) => {
+    const { checkinDate, checkoutDate } = getRecordDateLabels(record);
+    return `Dear ${record.name},\n\n` +
+      `This is a friendly reminder about your upcoming booking.\n\n` +
+      `Booking Details\n\n` +
+      `${record.bookingCode ? `Allotment No.: ${record.bookingCode}\n` : ''}` +
+      `Purpose: ${getRecordPurposeLabel(record)}\n\n` +
+      `Check-in: ${checkinDate}\n` +
+      `Check-out: ${checkoutDate}\n\n` +
+      `Please make sure to arrive on time and carry your booking confirmation if required.\n\n` +
+      `We look forward to serving you.`;
+  };
+
+  const buildPaymentReceiptMessage = (record: BookingRecord) => {
+    const { finalAmount, paidAmount } = getRecordAmounts(record);
+    return `Dear ${record.name},\n\n` +
+      `Your payment has been successfully received.\n\n` +
+      `Payment Receipt\n\n` +
+      `${record.bookingCode ? `Allotment No.: ${record.bookingCode}\n` : ''}` +
+      `Name: ${record.name}\n` +
+      `Mobile: ${record.mobile}\n\n` +
+      `Final Amount: Rs ${finalAmount.toLocaleString()}\n` +
+      `Paid Amount: Rs ${paidAmount.toLocaleString()}\n` +
+      `Payment Status: Completed\n\n` +
+      `Thank you for your payment. Your booking is confirmed.`;
+  };
+
+  const buildCustomerNotificationMessage = (record: BookingRecord, template: CustomerNotificationTemplate) => {
+    switch (template) {
+      case 'pending-payment-approved':
+        return buildPendingPaymentApprovedMessage(record);
+      case 'pending-payment-reminder':
+        return buildPendingPaymentReminderMessage(record);
+      case 'partial-payment-received':
+        return buildPartialPaymentReceivedMessage(record);
+      case 'payment-rejected':
+        return buildPaymentRejectedMessage(record);
+      case 'booking-confirmation':
+        return buildBookingConfirmationMessage(record);
+      case 'booking-approved':
+        return buildBookingApprovedMessage(record);
+      case 'booking-cancelled':
+        return buildBookingCancelledMessage(record);
+      case 'event-reminder':
+        return buildEventReminderMessage(record);
+      case 'payment-receipt':
+        return buildPaymentReceiptMessage(record);
+      default:
+        return buildPendingPaymentReminderMessage(record);
+    }
+  };
+
+  const getDefaultNotificationTemplate = (record: BookingRecord, adminRejected: boolean): CustomerNotificationTemplate => {
+    const { paidAmount, pendingAmount } = getRecordAmounts(record);
+    if (adminRejected) return 'payment-rejected';
+    if (pendingAmount <= 0 && paidAmount > 0) return 'payment-receipt';
+    if (pendingAmount > 0 && paidAmount > 0) return 'partial-payment-received';
+    return 'pending-payment-reminder';
+  };
+
+  const sendCustomerNotificationWhatsapp = (record: BookingRecord, template: CustomerNotificationTemplate) => {
+    const message = buildCustomerNotificationMessage(record, template);
+    openCustomerWhatsappMessage(record, message);
+  };
+
+  const buildCustomerBookingWhatsappMessage = (record: BookingRecord) => {
+    const { pendingAmount } = getRecordAmounts(record);
+
+    if (pendingAmount <= 0) {
+      return buildPendingPaymentApprovedMessage(record);
+    }
+
+    return buildPartialPaymentReceivedMessage(record);
   };
 
   const sendCustomerBookingWhatsapp = (record: BookingRecord) => {
-    const digits = String(record.mobile || '').replace(/\D/g, '');
-    if (digits.length < 10) return;
-    const phone = digits.length > 10 ? digits.slice(-10) : digits;
-    const whatsappUrl = `https://wa.me/91${phone}?text=${encodeURIComponent(buildCustomerBookingWhatsappMessage(record))}`;
-    window.open(whatsappUrl, '_blank');
+    openCustomerWhatsappMessage(record, buildCustomerBookingWhatsappMessage(record));
   };
 
   const notifyAdminForBooking = (record: BookingRecord) => {
@@ -4564,11 +4986,9 @@ const AdminPanelPage: React.FC<{
       const result = String(event.target?.result || '');
       if (!result) return;
       setAdminLogoUrl(result);
-      try {
-        window.localStorage.setItem(ADMIN_LOGO_STORAGE_KEY, result);
-      } catch {
-        // ignore storage errors
-      }
+      void persistUiAssets({ adminLogoUrl: result }).catch((err: any) => {
+        setError(err?.message || 'Unable to save logo');
+      });
       setError('');
     };
     reader.readAsDataURL(file);
@@ -4576,11 +4996,9 @@ const AdminPanelPage: React.FC<{
 
   const clearAdminLogo = () => {
     setAdminLogoUrl('');
-    try {
-      window.localStorage.removeItem(ADMIN_LOGO_STORAGE_KEY);
-    } catch {
-      // ignore storage errors
-    }
+    void persistUiAssets({ adminLogoUrl: '' }).catch((err: any) => {
+      setError(err?.message || 'Unable to clear logo');
+    });
   };
 
 
@@ -4775,11 +5193,13 @@ const AdminPanelPage: React.FC<{
     if (record.status === 'canceled') return;
     const checkin = new Date(record.checkinDate);
     const checkout = new Date(record.checkoutDate);
+    if (Number.isNaN(checkin.getTime())) return;
     const targetTotal = Number(record.finalAmount ?? record.totalAmount);
     const paidAmount = Number(record.paymentAmount || 0);
     const pendingAmount = Math.max(targetTotal - paidAmount, 0);
     const isFullPaid = paidAmount >= targetTotal;
     const cursor = new Date(checkin);
+
     while (cursor < checkout) {
       const dateKey = cursor.toISOString().split('T')[0];
       if (!bookedByDate[dateKey]) {
@@ -5363,7 +5783,7 @@ const AdminPanelPage: React.FC<{
                   style={{ width: '100%', height: '110px', objectFit: 'cover', borderRadius: '10px', border: '1px solid #cbd5e1', display: 'block' }}
                 />
                 <div style={{ marginTop: '6px', fontSize: '0.8rem', color: '#475569', fontWeight: 600 }}>
-                  Current Photo: {isCustomHallImage ? 'Uploaded' : 'Default'} ({hallImageUrls.length}/12)
+                  Current Photo: {isCustomHallImage ? 'Uploaded' : 'Not set'} ({hallImageUrls.length}/12)
                 </div>
               </div>
             ) : (
@@ -5402,11 +5822,14 @@ const AdminPanelPage: React.FC<{
                 <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleHallImageUpload} />
               </label>
               <button
-                title="Use Default"
-                aria-label="Use Default"
+                title="Clear Photos"
+                aria-label="Clear Photos"
                 onClick={() => {
-                  setHallImageUrls(DEFAULT_HALL_IMAGES);
+                  setHallImageUrls([]);
                   setSelectedHallImageIndex(0);
+                  void persistUiAssets({ hallImageUrls: [] }).catch((err: any) => {
+                    setError(err?.message || 'Unable to clear hall photos');
+                  });
                 }}
                 style={{ border: 'none', borderRadius: '8px', width: '40px', height: '40px', background: '#64748b', color: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, fontSize: '1rem' }}
               >
@@ -5484,37 +5907,67 @@ const AdminPanelPage: React.FC<{
         <div className="admin-card" ref={offerComplainFeedbackRef} style={{ background: 'rgba(255,255,255,0.95)', borderRadius: '16px', padding: '14px', boxShadow: '0 12px 26px rgba(0,0,0,0.12)', marginBottom: '14px', order: 7 }}>
           <h3 style={{ marginTop: 0, color: '#0f172a' }}>OFFER MESSAGE</h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px', marginBottom: '10px' }}>
-            <select
-              value={selectedOfferCode}
-              onChange={(e) => setSelectedOfferCode(e.target.value)}
-              style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
-            >
-              {upcomingBookings.length ? (
-                upcomingBookings.map((row) => (
-                  <option key={row._id} value={row.bookingCode || ''}>
-                    {(row.bookingCode || '----')} | {new Date(row.checkinDate).toLocaleDateString('en-IN')}
-                  </option>
-                ))
-              ) : (
-                <option value="">No upcoming bookings</option>
-              )}
-            </select>
-            <input
-              value={selectedOfferBooking ? selectedOfferPendingAmount : ''}
-              readOnly
-              placeholder="Pending amount"
-              style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', background: '#f8fafc' }}
-            />
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Allotment No.
+              <select
+                value={selectedOfferCode}
+                onChange={(e) => setSelectedOfferCode(e.target.value)}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+              >
+                {upcomingBookings.length ? (
+                  upcomingBookings.map((row) => (
+                    <option key={row._id} value={row.bookingCode || ''}>
+                      {(row.bookingCode || '----')} | {new Date(row.checkinDate).toLocaleDateString('en-IN')}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">No upcoming bookings</option>
+                )}
+              </select>
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Pending Amount
+              <input
+                value={selectedOfferBooking ? selectedOfferPendingAmount : ''}
+                readOnly
+                placeholder="Pending amount"
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', background: '#f8fafc' }}
+              />
+            </label>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px', marginBottom: '8px' }}>
-            <input value={offerForm.name} onChange={(e) => setOfferForm({ ...offerForm, name: e.target.value })} placeholder="Guest Name" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
-            <input value={offerForm.checkin} onChange={(e) => setOfferForm({ ...offerForm, checkin: e.target.value })} placeholder="Check-in" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
-            <input value={offerForm.checkout} onChange={(e) => setOfferForm({ ...offerForm, checkout: e.target.value })} placeholder="Check-out" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
-            <input value={offerForm.roomType} onChange={(e) => setOfferForm({ ...offerForm, roomType: e.target.value })} placeholder="Hall/Room Purpose" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
-            <input value={offerForm.original} onChange={(e) => setOfferForm({ ...offerForm, original: e.target.value })} placeholder="Original Amount" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
-            <input value={offerForm.discount} onChange={(e) => setOfferForm({ ...offerForm, discount: e.target.value })} placeholder="Discount" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
-            <input value={offerForm.total} onChange={(e) => setOfferForm({ ...offerForm, total: e.target.value })} placeholder="Final Payable Amount" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
-            <input value={offerForm.paymentStatus} onChange={(e) => setOfferForm({ ...offerForm, paymentStatus: e.target.value })} placeholder="Payment Status" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Guest Name
+              <input value={offerForm.name} onChange={(e) => setOfferForm({ ...offerForm, name: e.target.value })} placeholder="Guest Name" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Check-in
+              <input value={offerForm.checkin} onChange={(e) => setOfferForm({ ...offerForm, checkin: e.target.value })} placeholder="Check-in" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Check-out
+              <input value={offerForm.checkout} onChange={(e) => setOfferForm({ ...offerForm, checkout: e.target.value })} placeholder="Check-out" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Hall/Room Purpose
+              <input value={offerForm.roomType} onChange={(e) => setOfferForm({ ...offerForm, roomType: e.target.value })} placeholder="Hall/Room Purpose" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Original Amount
+              <input value={offerForm.original} onChange={(e) => setOfferForm({ ...offerForm, original: e.target.value })} placeholder="Original Amount" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Discount
+              <input value={offerForm.discount} onChange={(e) => setOfferForm({ ...offerForm, discount: e.target.value })} placeholder="Discount" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Final Payable Amount
+              <input value={offerForm.total} onChange={(e) => setOfferForm({ ...offerForm, total: e.target.value })} placeholder="Final Payable Amount" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Payment Status
+              <input value={offerForm.paymentStatus} onChange={(e) => setOfferForm({ ...offerForm, paymentStatus: e.target.value })} placeholder="Payment Status" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
+            </label>
           </div>
           <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px', color: '#0f172a', whiteSpace: 'pre-wrap', marginBottom: '10px' }}>
             {renderedOfferMessage || 'Select an upcoming Allotment No. to preview message.'}
@@ -5561,49 +6014,67 @@ const AdminPanelPage: React.FC<{
         <div className="admin-card" ref={quickBookingRef} style={{ background: 'rgba(255,255,255,0.95)', borderRadius: '16px', padding: '14px', boxShadow: '0 12px 26px rgba(0,0,0,0.12)', marginBottom: '14px', order: 1 }}>
           <h3 style={{ marginTop: 0, color: '#0f172a' }}>QUICK BOOKING</h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '8px' }}>
-            <input
-              value={adminBookingForm.name}
-              onChange={(e) => setAdminBookingForm({ ...adminBookingForm, name: e.target.value })}
-              placeholder="Customer Name"
-              style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
-            />
-            <input
-              value={adminBookingForm.mobile}
-              onChange={(e) => setAdminBookingForm({ ...adminBookingForm, mobile: e.target.value.replace(/\D/g, '').slice(0, 10) })}
-              placeholder="Mobile"
-              style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
-            />
-            <input
-              type="date"
-              value={adminBookingForm.checkinDate}
-              onChange={(e) => setAdminBookingForm({ ...adminBookingForm, checkinDate: e.target.value })}
-              style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
-            />
-            <input
-              type="date"
-              value={adminBookingForm.checkoutDate}
-              onChange={(e) => setAdminBookingForm({ ...adminBookingForm, checkoutDate: e.target.value })}
-              style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
-            />
-            <select
-              value={adminBookingForm.bookingPurpose}
-              onChange={(e) => setAdminBookingForm({ ...adminBookingForm, bookingPurpose: e.target.value as 'meeting' | 'camp' | 'picnic' | 'function' | 'program' | 'other' })}
-              style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
-            >
-              <option value="meeting">Meeting</option>
-              <option value="camp">Camp</option>
-              <option value="picnic">Picnic</option>
-              <option value="function">Function</option>
-              <option value="program">Program</option>
-              <option value="other">Other</option>
-            </select>
-            {adminBookingForm.bookingPurpose === 'other' && (
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Header Name
               <input
-                value={adminBookingForm.bookingPurposeOther}
-                onChange={(e) => setAdminBookingForm({ ...adminBookingForm, bookingPurposeOther: e.target.value })}
-                placeholder="Purpose details"
+                value={adminBookingForm.name}
+                onChange={(e) => setAdminBookingForm({ ...adminBookingForm, name: e.target.value })}
+                placeholder="Header Name"
                 style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
               />
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Mobile
+              <input
+                value={adminBookingForm.mobile}
+                onChange={(e) => setAdminBookingForm({ ...adminBookingForm, mobile: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                placeholder="Mobile"
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Check-in Date
+              <input
+                type="date"
+                value={adminBookingForm.checkinDate}
+                onChange={(e) => setAdminBookingForm({ ...adminBookingForm, checkinDate: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Check-out Date
+              <input
+                type="date"
+                value={adminBookingForm.checkoutDate}
+                onChange={(e) => setAdminBookingForm({ ...adminBookingForm, checkoutDate: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+              Booking Purpose
+              <select
+                value={adminBookingForm.bookingPurpose}
+                onChange={(e) => setAdminBookingForm({ ...adminBookingForm, bookingPurpose: e.target.value as 'meeting' | 'camp' | 'picnic' | 'function' | 'program' | 'other' })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+              >
+                <option value="meeting">Meeting</option>
+                <option value="camp">Camp</option>
+                <option value="picnic">Picnic</option>
+                <option value="function">Function</option>
+                <option value="program">Program</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            {adminBookingForm.bookingPurpose === 'other' && (
+              <label style={{ display: 'grid', gap: '4px', fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
+                Purpose Details
+                <input
+                  value={adminBookingForm.bookingPurposeOther}
+                  onChange={(e) => setAdminBookingForm({ ...adminBookingForm, bookingPurposeOther: e.target.value })}
+                  placeholder="Purpose details"
+                  style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+                />
+              </label>
             )}
           </div>
           <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
@@ -5612,7 +6083,7 @@ const AdminPanelPage: React.FC<{
               disabled={saving}
               style={{ border: 'none', borderRadius: '8px', padding: '10px 14px', background: '#0f766e', color: 'white', cursor: 'pointer' }}
             >
-              {saving ? 'Creating...' : 'Create No-Payment Booking'}
+              {saving ? 'Creating...' : 'create booking'}
             </button>
           </div>
         </div>
@@ -5729,9 +6200,11 @@ const AdminPanelPage: React.FC<{
                 marginBottom: '12px',
                 background: '#f8fafc'
               }}>
-                <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '10px' }}>Edit Booking</div>
+                <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '10px' }}>
+                  Edit Booking{editingHeaderCode ? ` - Allotment No. ${editingHeaderCode}` : ''} - Name: {editingHeaderName}
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px', marginBottom: '10px' }}>
-                  <input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} placeholder="Name" style={{ padding: '8px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
+                  <input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} placeholder="Header Name" style={{ padding: '8px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
                   <input value={editForm.mobile} onChange={(e) => setEditForm({ ...editForm, mobile: e.target.value.replace(/\D/g, '').slice(0, 10) })} placeholder="Mobile" style={{ padding: '8px', borderRadius: '8px', border: '1px solid #cbd5e1' }} />
                   <select value={editForm.bookingPurpose} onChange={(e) => setEditForm({ ...editForm, bookingPurpose: e.target.value as 'meeting' | 'camp' | 'picnic' | 'function' | 'program' | 'other' })} style={{ padding: '8px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
                     <option value="meeting">Meeting</option>
@@ -5789,6 +6262,7 @@ const AdminPanelPage: React.FC<{
                     <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #e2e8f0' }}>Discount</th>
                     <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #e2e8f0' }}>Final</th>
                     <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #e2e8f0' }}>Pending</th>
+                    <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #e2e8f0' }}>Payment Proof</th>
                     <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #e2e8f0' }}>Payment Approval</th>
                     <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #e2e8f0' }}>Action</th>
                   </tr>
@@ -5796,7 +6270,7 @@ const AdminPanelPage: React.FC<{
                 <tbody>
                   {!records.length ? (
                     <tr>
-                      <td colSpan={14} style={{ padding: '10px', color: '#64748b' }}>No records</td>
+                      <td colSpan={15} style={{ padding: '10px', color: '#64748b' }}>No records</td>
                     </tr>
                   ) : (
                     records.map((row) => (
@@ -5806,10 +6280,15 @@ const AdminPanelPage: React.FC<{
                           const userMarked = Boolean(approval?.userMarked);
                           const adminApproved = Boolean(approval?.adminApproved);
                           const adminRejected = Boolean(approval?.adminRejected);
+                          const finalAmountValue = Number(row.finalAmount ?? row.totalAmount);
+                          const paidAmountValue = Number(row.paymentAmount || 0);
+                          const pendingAmountValue = Math.max(finalAmountValue - paidAmountValue, 0);
                           const securityDepositValue = Math.max(
                             Number(row.securityDepositAmount ?? (row.includeSecurityDeposit ? 500 : 0)),
                             0
                           );
+                          const selectedNotificationTemplate =
+                            notificationTemplateById[row._id] || getDefaultNotificationTemplate(row, adminRejected);
                           return (
                             <>
                         <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9', fontWeight: 700, color: '#1d4ed8' }}>{row.bookingCode || '----'}</td>
@@ -5821,14 +6300,39 @@ const AdminPanelPage: React.FC<{
                         <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9' }}>{new Date(row.checkinDate).toLocaleDateString('en-IN')}</td>
                         <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9' }}>{new Date(row.checkoutDate).toLocaleDateString('en-IN')}</td>
                         <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9' }}>Rs {row.totalAmount}</td>
-                        <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9', fontWeight: 700, color: '#166534' }}>Rs {Number(row.paymentAmount || 0)}</td>
+                        <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9', fontWeight: 700, color: '#166534' }}>Rs {paidAmountValue}</td>
                         <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9', fontWeight: 700, color: securityDepositValue > 0 ? '#166534' : '#64748b' }}>
                           Rs {securityDepositValue}
                         </td>
                         <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9' }}>Rs {Number(row.discountAmount || 0)}</td>
-                        <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9', fontWeight: 700 }}>Rs {Number(row.finalAmount ?? row.totalAmount)}</td>
-                        <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9', fontWeight: 700, color: Number(row.finalAmount ?? row.totalAmount) - Number(row.paymentAmount || 0) > 0 ? '#b45309' : '#166534' }}>
-                          Rs {Math.max(Number(row.finalAmount ?? row.totalAmount) - Number(row.paymentAmount || 0), 0)}
+                        <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9', fontWeight: 700 }}>Rs {finalAmountValue}</td>
+                        <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9', fontWeight: 700, color: pendingAmountValue > 0 ? '#b45309' : '#166534' }}>
+                          Rs {pendingAmountValue}
+                        </td>
+                        <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9' }}>
+                          {(() => {
+                            const proofUrl = String(row.profilePhoto || '').trim();
+                            if (!proofUrl) {
+                              return <div style={{ color: '#64748b', fontSize: '0.78rem' }}>Not Uploaded</div>;
+                            }
+                            const isImageProof = proofUrl.startsWith('data:image') || /\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)/i.test(proofUrl);
+                            if (isImageProof) {
+                              return (
+                                <a href={proofUrl} target="_blank" rel="noreferrer" title="Open Payment Proof" style={{ display: 'inline-block' }}>
+                                  <img
+                                    src={proofUrl}
+                                    alt="Payment proof"
+                                    style={{ width: '56px', height: '40px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #cbd5e1', display: 'block' }}
+                                  />
+                                </a>
+                              );
+                            }
+                            return (
+                              <a href={proofUrl} target="_blank" rel="noreferrer" style={{ color: '#1d4ed8', fontWeight: 700, fontSize: '0.78rem', textDecoration: 'none' }}>
+                                View Proof
+                              </a>
+                            );
+                          })()}
                         </td>
                         <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9' }}>
                           {adminApproved ? (
@@ -5858,23 +6362,53 @@ const AdminPanelPage: React.FC<{
                           )}
                         </td>
                         <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9' }}>
-                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'nowrap', alignItems: 'center' }}>
-                            <button
-                              onClick={() => startEdit(row)}
-                              title="Edit"
-                              aria-label="Edit"
-                              style={{ border: 'none', borderRadius: '8px', width: '32px', height: '32px', background: '#1d4ed8', color: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
-                            >
-                              {'\u270E'}
-                            </button>
-                            <button
-                              onClick={() => openDeleteDialog(row._id, row.name)}
-                              title="Delete"
-                              aria-label="Delete"
-                              style={{ border: 'none', borderRadius: '8px', width: '32px', height: '32px', background: '#dc2626', color: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
-                            >
-                              {'\uD83D\uDDD1'}
-                            </button>
+                          <div style={{ display: 'grid', gap: '6px' }}>
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'nowrap', alignItems: 'center' }}>
+                              <button
+                                onClick={() => startEdit(row)}
+                                title="Edit"
+                                aria-label="Edit"
+                                style={{ border: 'none', borderRadius: '8px', width: '32px', height: '32px', background: '#1d4ed8', color: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+                              >
+                                {'\u270E'}
+                              </button>
+                              <button
+                                onClick={() => openDeleteDialog(row._id, row.name)}
+                                title="Delete"
+                                aria-label="Delete"
+                                style={{ border: 'none', borderRadius: '8px', width: '32px', height: '32px', background: '#dc2626', color: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+                              >
+                                {'\uD83D\uDDD1'}
+                              </button>
+                            </div>
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                              <select
+                                value={selectedNotificationTemplate}
+                                onChange={(e) =>
+                                  setNotificationTemplateById((prev) => ({
+                                    ...prev,
+                                    [row._id]: e.target.value as CustomerNotificationTemplate
+                                  }))
+                                }
+                                style={{ minWidth: '130px', maxWidth: '160px', padding: '6px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.74rem' }}
+                              >
+                                <option value="pending-payment-reminder">Pending Reminder</option>
+                                <option value="partial-payment-received">Partial Payment</option>
+                                <option value="payment-receipt">Payment Receipt</option>
+                                <option value="pending-payment-approved">Pending Approved</option>
+                                <option value="payment-rejected">Payment Rejected</option>
+                                <option value="booking-confirmation">Booking Confirmation</option>
+                                <option value="booking-approved">Booking Approved</option>
+                                <option value="booking-cancelled">Booking Cancelled</option>
+                                <option value="event-reminder">Event Reminder</option>
+                              </select>
+                              <button
+                                onClick={() => sendCustomerNotificationWhatsapp(row, selectedNotificationTemplate)}
+                                style={{ border: 'none', borderRadius: '8px', padding: '7px 8px', background: '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 700, fontSize: '0.75rem', whiteSpace: 'nowrap' }}
+                              >
+                                Send
+                              </button>
+                            </div>
                           </div>
                         </td>
                             </>
