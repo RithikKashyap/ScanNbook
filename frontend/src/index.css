@@ -81,6 +81,10 @@ body.theme-dark .settings-menu-item:hover {
   background: var(--bg-gradient);
 }
 
+.booking-details-shell {
+  background: #f4f6fb;
+}
+
 .login-banner-shell {
   background: url("/Jharkhand_Kshatriya_Sangh.jpeg") center center / cover no-repeat fixed;
 }

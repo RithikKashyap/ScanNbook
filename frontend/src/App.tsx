@@ -758,9 +758,10 @@ const App: React.FC = () => {
   };
 
   const isLoginPage = currentPage === 'login';
+  const isBookingDetailsPage = currentPage === 'booking-details-login';
 
   return (
-    <div className={`app-shell ${isLoginPage ? 'login-banner-shell' : 'admin-shell'}`} style={{
+    <div className={`app-shell ${isLoginPage ? 'login-banner-shell' : isBookingDetailsPage ? 'booking-details-shell' : 'admin-shell'}`} style={{
       minHeight: '100vh',
       fontFamily: "'Sora', 'IBM Plex Sans', sans-serif"
     }}>
@@ -800,8 +801,10 @@ const LoginPage: React.FC<{
   const [feedbackPhone, setFeedbackPhone] = useState('');
   const [settingsStatusText, setSettingsStatusText] = useState('');
   const settingsMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const checkDateCalendarRef = React.useRef<HTMLDivElement | null>(null);
+  const [showCheckDateCalendar, setShowCheckDateCalendar] = useState(true);
   const [selectedLanguage, setSelectedLanguage] = useState<AppLanguage>('en');
-  const settingItems = ['Admin', 'Language', 'Contact', 'Service', 'Check Date', 'Booking Detail', 'Pay', 'Complain', 'Feedback'];
+  const settingItems = ['Admin', 'Language', 'Contact', 'Service', 'Booking Detail', 'Pay', 'Complain', 'Feedback'];
   const languageText = {
     en: {
       back: 'Back',
@@ -871,6 +874,17 @@ const LoginPage: React.FC<{
     }, 2600);
     return () => window.clearInterval(timer);
   }, [hallSlides.length]);
+
+  React.useEffect(() => {
+    if (!hallSlides.length) {
+      setIsHallImageOpen(false);
+      setHallSlideIndex(0);
+      return;
+    }
+    if (hallSlideIndex >= hallSlides.length) {
+      setHallSlideIndex(0);
+    }
+  }, [hallSlideIndex, hallSlides.length]);
 
   React.useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
@@ -946,8 +960,6 @@ const LoginPage: React.FC<{
   };
 
   React.useEffect(() => {
-    if (!activeSettingsTab) return;
-
     if (activeSettingsTab === 'contact') {
       setSettingsContacts(getStoredProfiles('adminContactList'));
       return;
@@ -956,7 +968,7 @@ const LoginPage: React.FC<{
       setSettingsServiceProviders(getStoredProfiles('adminServiceProviderList'));
       return;
     }
-    if (activeSettingsTab !== 'booking') return;
+    if (activeSettingsTab && activeSettingsTab !== 'booking') return;
 
     const loadBookedDates = async () => {
       try {
@@ -984,7 +996,7 @@ const LoginPage: React.FC<{
       }
     };
 
-    loadBookedDates();
+    void loadBookedDates();
   }, [activeSettingsTab]);
 
   const toTelHref = (value: string) => {
@@ -1188,53 +1200,27 @@ const LoginPage: React.FC<{
         boxShadow: '0 20px 40px rgba(0,0,0,0.1)'
       }}>
         <div className="card-topbar booking-navbar" style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-          <button
-            onClick={onBack}
-            className="compact-back-btn booking-navbar-back-btn"
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: '#1f2937',
-              fontWeight: 600,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              justifySelf: 'start'
-            }}
-          >
-            <span aria-hidden="true" style={{ color: '#2f6b4f', fontSize: '1.3rem', lineHeight: 1 }}>&#8592;</span>
-            <span>{t.back}</span>
-          </button>
-
-          <div className="booking-navbar-title" style={{ textAlign: 'center', fontWeight: 700, color: '#111827', fontSize: '1.45rem' }}>
-            Booking Details
-          </div>
-
-          <div ref={settingsMenuRef} className="settings-wrap" style={{ position: 'relative', justifySelf: 'end' }}>
+          <div ref={settingsMenuRef} className="settings-wrap" style={{ position: 'relative', justifySelf: 'start' }}>
             <button
               type="button"
-              aria-label="Settings"
+              aria-label="Menu"
               onClick={() => setIsSettingsOpen((prev) => !prev)}
               className="settings-btn booking-navbar-settings-btn"
               style={{
-                width: '42px',
-                height: '42px',
                 border: '1px solid #d1d5db',
                 borderRadius: '999px',
                 background: '#f8fafc',
                 color: '#0f172a',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                padding: '0 12px',
+                minWidth: '84px',
+                height: '42px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center'
               }}
             >
-              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M4 6h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                <circle cx="17" cy="6" r="2" stroke="currentColor" strokeWidth="2" />
-                <path d="M20 12H10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                <circle cx="7" cy="12" r="2" stroke="currentColor" strokeWidth="2" />
-                <path d="M4 18h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                <circle cx="17" cy="18" r="2" stroke="currentColor" strokeWidth="2" />
-              </svg>
+              <span style={{ fontSize: '0.86rem', fontWeight: 700 }}>Menu</span>
             </button>
             {isSettingsOpen && (
               <div
@@ -1242,8 +1228,8 @@ const LoginPage: React.FC<{
                 style={{
                   position: 'absolute',
                   top: '48px',
-                  right: 0,
-                  minWidth: '170px',
+                  left: 0,
+                  minWidth: '190px',
                   background: '#ffffff',
                   border: '1px solid #e2e8f0',
                   borderRadius: '10px',
@@ -1276,24 +1262,75 @@ const LoginPage: React.FC<{
               </div>
             )}
           </div>
+
+          <div className="booking-navbar-title" style={{ textAlign: 'center', fontWeight: 700, color: '#111827', fontSize: '1.45rem' }}>
+            Booking Details
+          </div>
+
+          <div style={{ width: '98px', height: '42px', justifySelf: 'end' }} />
         </div>
 
-        <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+        {showCheckDateCalendar && (
           <div
-            className="hall-hero-frame"
+            ref={checkDateCalendarRef}
             style={{
-              position: 'relative',
-              width: '100%',
-              minHeight: '200px',
-              boxSizing: 'border-box',
-              marginBottom: '15px',
-              borderRadius: '16px',
-              background: 'transparent',
-              border: '1px solid rgba(255,255,255,0.55)',
-              overflow: 'hidden'
+              border: '1px solid #dbeafe',
+              borderRadius: '12px',
+              background: '#f8fbff',
+              padding: '8px',
+              marginBottom: '12px'
             }}
           >
-            {hallSlides.length ? (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <button
+                type="button"
+                onClick={() => setSettingsCalendarMonth(new Date(settingsCalendarMonth.getFullYear(), settingsCalendarMonth.getMonth() - 1, 1))}
+                style={{ border: '1px solid #cbd5e1', borderRadius: '7px', padding: '4px 8px', background: '#ffffff', cursor: 'pointer', fontSize: '0.74rem' }}
+              >
+                Prev
+              </button>
+              <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.86rem' }}>
+                {settingsCalendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </div>
+              <button
+                type="button"
+                onClick={() => setSettingsCalendarMonth(new Date(settingsCalendarMonth.getFullYear(), settingsCalendarMonth.getMonth() + 1, 1))}
+                style={{ border: '1px solid #cbd5e1', borderRadius: '7px', padding: '4px 8px', background: '#ffffff', cursor: 'pointer', fontSize: '0.74rem' }}
+              >
+                Next
+              </button>
+            </div>
+            <div className="calendar-weekdays-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '4px', marginBottom: '4px', fontSize: '0.64rem', fontWeight: 700, color: '#475569' }}>
+              <div style={{ textAlign: 'center' }}>Sun</div>
+              <div style={{ textAlign: 'center' }}>Mon</div>
+              <div style={{ textAlign: 'center' }}>Tue</div>
+              <div style={{ textAlign: 'center' }}>Wed</div>
+              <div style={{ textAlign: 'center' }}>Thu</div>
+              <div style={{ textAlign: 'center' }}>Fri</div>
+              <div style={{ textAlign: 'center' }}>Sat</div>
+            </div>
+            <div className="calendar-days-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '4px' }}>
+              {renderSettingsCalendar()}
+            </div>
+          </div>
+        )}
+
+        {hallSlides.length > 0 && (
+          <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+            <div
+              className="hall-hero-frame"
+              style={{
+                position: 'relative',
+                width: '100%',
+                minHeight: '200px',
+                boxSizing: 'border-box',
+                marginBottom: '15px',
+                borderRadius: '16px',
+                background: 'transparent',
+                border: '1px solid rgba(255,255,255,0.55)',
+                overflow: 'hidden'
+              }}
+            >
               <img
                 className="hall-hero-image"
                 src={hallSlides[hallSlideIndex]}
@@ -1308,28 +1345,23 @@ const LoginPage: React.FC<{
                   cursor: 'zoom-in'
                 }}
               />
-            ) : (
-              <div style={{ width: '100%', height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#e2e8f0', fontWeight: 600 }}>
-                No image
+              <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', padding: '10px 0', background: '#f8fafc' }}>
+                {hallSlides.map((_, idx) => (
+                  <span
+                    key={`login-slide-dot-${idx}`}
+                    style={{
+                      width: '7px',
+                      height: '7px',
+                      borderRadius: '999px',
+                      background: idx === hallSlideIndex ? '#1d4ed8' : '#cbd5e1',
+                      display: 'inline-block'
+                    }}
+                  />
+                ))}
               </div>
-            )}
-            <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', padding: '10px 0', background: '#f8fafc' }}>
-              {hallSlides.map((_, idx) => (
-                <span
-                  key={`login-slide-dot-${idx}`}
-                  style={{
-                    width: '7px',
-                    height: '7px',
-                    borderRadius: '999px',
-                    background: idx === hallSlideIndex ? '#1d4ed8' : '#cbd5e1',
-                    display: 'inline-block'
-                  }}
-                />
-              ))}
             </div>
           </div>
-          
-        </div>
+        )}
 
         <form onSubmit={handleSubmit}>
           <div
@@ -1683,9 +1715,6 @@ const LoginPage: React.FC<{
                 <div className="calendar-days-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '6px' }}>
                   {renderSettingsCalendar()}
                 </div>
-                <div style={{ marginTop: '8px', fontSize: '0.78rem', color: '#475569' }}>
-                  Booking calendar shows availability only. Personal details are hidden.
-                </div>
               </div>
             )}
 
@@ -1742,7 +1771,7 @@ const LoginPage: React.FC<{
           </div>
         </div>
       )}
-      {isHallImageOpen && (
+      {isHallImageOpen && hallSlides.length > 0 && (
         <div
           onClick={() => setIsHallImageOpen(false)}
           style={{
@@ -1767,21 +1796,17 @@ const LoginPage: React.FC<{
               background: 'transparent'
             }}
           >
-            {hallSlides.length ? (
-              <img
-                src={hallSlides[hallSlideIndex]}
-                alt="Hall/Room View Full"
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  maxHeight: '92vh',
-                  objectFit: 'contain',
-                  display: 'block'
-                }}
-              />
-            ) : (
-              <div style={{ color: '#e2e8f0', padding: '30px 40px' }}>No image</div>
-            )}
+            <img
+              src={hallSlides[hallSlideIndex]}
+              alt="Hall/Room View Full"
+              style={{
+                width: '100%',
+                height: '100%',
+                maxHeight: '92vh',
+                objectFit: 'contain',
+                display: 'block'
+              }}
+            />
           </div>
         </div>
       )}
@@ -2021,6 +2046,12 @@ const BookingPage: React.FC<{
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
   };
+  const getDateAfterDaysKey = (dateKey: string, daysToAdd: number) => {
+    const [year, month, day] = dateKey.split('-').map(Number);
+    const targetDate = new Date(year, month - 1, day);
+    targetDate.setDate(targetDate.getDate() + daysToAdd);
+    return getDateKey(targetDate);
+  };
 
   const isCheckoutDateAllowed = (checkinDate: string, checkoutDate: string) => {
     if (!checkinDate || !checkoutDate) return false;
@@ -2110,16 +2141,103 @@ const BookingPage: React.FC<{
   };
 
   const availableDates = getAvailableDates();
-  const selectedStayDays =
-    bookingData.checkinDate && bookingData.checkoutDate
-      ? Math.max(
-          Math.ceil(
-            Math.abs(new Date(bookingData.checkoutDate).getTime() - new Date(bookingData.checkinDate).getTime()) /
-              (1000 * 60 * 60 * 24)
-          ),
-          1
-        )
-      : 0;
+  const availableDatesSet = new Set(availableDates);
+  const getStayDays = (checkinDate: string, checkoutDate: string) => {
+    if (!checkinDate || !checkoutDate) return 0;
+    return Math.max(
+      Math.ceil(
+        Math.abs(new Date(checkoutDate).getTime() - new Date(checkinDate).getTime()) / (1000 * 60 * 60 * 24)
+      ),
+      1
+    );
+  };
+  const resolveCheckoutForDays = (checkinDate: string, days: number) => {
+    if (!checkinDate) return '';
+    const safeDays = Math.max(1, Math.floor(days));
+    const candidateCheckout = getDateAfterDaysKey(checkinDate, safeDays);
+    if (!availableDatesSet.has(candidateCheckout)) return '';
+    if (hasBookedDateInBetween(checkinDate, candidateCheckout)) return '';
+    return candidateCheckout;
+  };
+
+  const updateCheckinDate = (newCheckinDate: string) => {
+    if (!newCheckinDate) {
+      setBookingData({ ...bookingData, checkinDate: '', checkoutDate: '' });
+      return;
+    }
+    if (isDateBooked(newCheckinDate)) {
+      alert('Selected check-in date is already booked');
+      return;
+    }
+
+    const previousDayCount = getStayDays(bookingData.checkinDate, bookingData.checkoutDate) || 1;
+    const autoCheckoutDate =
+      resolveCheckoutForDays(newCheckinDate, previousDayCount) || resolveCheckoutForDays(newCheckinDate, 1);
+    const newData = {
+      ...bookingData,
+      checkinDate: newCheckinDate,
+      checkoutDate: autoCheckoutDate
+    };
+    setBookingData(newData);
+  };
+
+  const updateCheckoutDate = (candidateCheckout: string) => {
+    if (!candidateCheckout) {
+      setBookingData({ ...bookingData, checkoutDate: '' });
+      return;
+    }
+    if (!bookingData.checkinDate) {
+      alert('Please select check-in date first');
+      return;
+    }
+    if (hasBookedDateInBetween(bookingData.checkinDate, candidateCheckout)) {
+      alert('Some dates are already booked');
+      return;
+    }
+    if (!isCheckoutDateAllowed(bookingData.checkinDate, candidateCheckout)) {
+      alert('Check-out date must be after check-in date');
+      return;
+    }
+    setBookingData({ ...bookingData, checkoutDate: candidateCheckout });
+  };
+  const updateBookingDays = (days: number) => {
+    if (!bookingData.checkinDate) {
+      alert('Please select check-in date first');
+      return;
+    }
+    const candidateCheckout = resolveCheckoutForDays(bookingData.checkinDate, days);
+    if (!candidateCheckout) {
+      alert('Selected day-wise range is not available');
+      return;
+    }
+    setBookingData({ ...bookingData, checkoutDate: candidateCheckout });
+  };
+
+  const handleCalendarDateClick = (dateKey: string) => {
+    if (!availableDatesSet.has(dateKey)) return;
+    if (bookingData.checkinDate === dateKey || bookingData.checkoutDate === dateKey) {
+      setBookingData({ ...bookingData, checkinDate: '', checkoutDate: '' });
+      return;
+    }
+    if (!bookingData.checkinDate) {
+      updateCheckinDate(dateKey);
+      return;
+    }
+
+    if (!isCheckoutDateAllowed(bookingData.checkinDate, dateKey)) {
+      if (isDateBooked(dateKey)) {
+        alert('Selected check-in date is already booked');
+        return;
+      }
+      updateCheckinDate(dateKey);
+      return;
+    }
+
+    updateCheckoutDate(dateKey);
+  };
+
+  const selectedStayDays = getStayDays(bookingData.checkinDate, bookingData.checkoutDate);
+  const bookingDayOptions = Array.from({ length: 15 }, (_, index) => index + 1);
 
   const renderCalendar = () => {
     const year = calendarMonth.getFullYear();
@@ -2141,23 +2259,44 @@ const BookingPage: React.FC<{
       const isCheckinSelected = bookingData.checkinDate === dateKey;
       const isCheckoutSelected = bookingData.checkoutDate === dateKey;
       const isSelected = isCheckinSelected || isCheckoutSelected;
+      const isWithinRange =
+        !!bookingData.checkinDate &&
+        !!bookingData.checkoutDate &&
+        dateKey > bookingData.checkinDate &&
+        dateKey < bookingData.checkoutDate;
+      const isSelectableFromCalendar = availableDatesSet.has(dateKey);
+      const dayBackground = isBooked
+        ? '#fee2e2'
+        : isCheckinSelected
+          ? '#2563eb'
+          : isCheckoutSelected
+            ? '#eaf2ff'
+            : isWithinRange
+              ? '#1d4ed8'
+              : '#f8fafc';
+      const dayTextColor = isBooked ? '#991b1b' : isCheckinSelected || isWithinRange ? '#ffffff' : '#1f2937';
+      const daySubTextColor = isBooked ? '#b91c1c' : isCheckinSelected || isWithinRange ? '#dbeafe' : '#0f766e';
+      const daySubText = isBooked ? 'Booked' : isCheckinSelected ? 'Check-in' : isCheckoutSelected ? 'Check-out' : isWithinRange ? 'Selected' : 'Available';
 
       cells.push(
         <div
           key={dateKey}
           className={`calendar-day-card booking-day-card ${isBooked ? 'is-booked' : 'is-available'}`}
+          onClick={() => handleCalendarDateClick(dateKey)}
           style={{
             minHeight: '74px',
             border: isSelected ? '2px solid #2563eb' : '1px solid #d1d5db',
             borderRadius: '12px',
             padding: '6px 7px',
-            background: isBooked ? '#fee2e2' : isSelected ? '#eaf2ff' : '#f8fafc',
-            boxSizing: 'border-box'
+            background: dayBackground,
+            boxSizing: 'border-box',
+            cursor: isSelectableFromCalendar ? 'pointer' : 'not-allowed',
+            opacity: isSelectableFromCalendar ? 1 : 0.45
           }}
         >
-          <div style={{ fontWeight: 700, fontSize: '0.72rem', marginBottom: '3px', color: isBooked ? '#991b1b' : '#1f2937' }}>{day}</div>
-          <div className="calendar-day-sub" style={{ fontSize: '0.6rem', color: isBooked ? '#b91c1c' : '#0f766e', lineHeight: 1.2 }}>
-            {isBooked ? 'Booked' : 'Available'}
+          <div style={{ fontWeight: 700, fontSize: '0.72rem', marginBottom: '3px', color: dayTextColor }}>{day}</div>
+          <div className="calendar-day-sub" style={{ fontSize: '0.6rem', color: daySubTextColor, lineHeight: 1.2 }}>
+            {daySubText}
           </div>
         </div>
       );
@@ -2257,23 +2396,7 @@ const BookingPage: React.FC<{
               </span>
               <select
                 value={bookingData.checkinDate}
-                onChange={(e) => {
-                  const newCheckinDate = e.target.value;
-                  if (isDateBooked(newCheckinDate)) {
-                    alert('Selected check-in date is already booked');
-                    return;
-                  }
-                  const newData = { ...bookingData, checkinDate: newCheckinDate };
-
-                  if (
-                    bookingData.checkoutDate &&
-                    !isCheckoutDateAllowed(newCheckinDate, bookingData.checkoutDate)
-                  ) {
-                    newData.checkoutDate = '';
-                  }
-
-                  setBookingData(newData);
-                }}
+                onChange={(e) => updateCheckinDate(e.target.value)}
                 style={{
                   width: '100%',
                   padding: '13px 42px 13px 46px',
@@ -2318,6 +2441,47 @@ const BookingPage: React.FC<{
 
           <div style={{ marginBottom: '16px' }}>
             <label style={{ display: 'block', marginBottom: '8px', color: '#111827', fontWeight: 500, fontSize: '1.12rem' }}>
+              Booking Duration
+            </label>
+            <div style={{ position: 'relative', marginBottom: '10px' }}>
+              <span style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#0f766e', fontWeight: 700 }}>
+                D
+              </span>
+              <span style={{ position: 'absolute', right: '14px', top: '50%', transform: 'translateY(-50%)', color: '#111827', pointerEvents: 'none' }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M6 9L12 15L18 9" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </span>
+              <select
+                value={Math.max(selectedStayDays, 1)}
+                onChange={(e) => updateBookingDays(Number(e.target.value))}
+                style={{
+                  width: '100%',
+                  padding: '13px 42px 13px 46px',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '13px',
+                  fontSize: '1.08rem',
+                  boxSizing: 'border-box',
+                  background: '#f8fafc',
+                  color: '#1f2937',
+                  appearance: 'none',
+                  WebkitAppearance: 'none',
+                  MozAppearance: 'none'
+                }}
+              >
+                {bookingDayOptions.map((dayCount) => {
+                  const candidateCheckout = bookingData.checkinDate ? getDateAfterDaysKey(bookingData.checkinDate, dayCount) : '';
+                  const blockedInBetween = bookingData.checkinDate ? hasBookedDateInBetween(bookingData.checkinDate, candidateCheckout) : false;
+                  const isDisabled = !bookingData.checkinDate || !availableDatesSet.has(candidateCheckout) || blockedInBetween;
+                  return (
+                    <option key={dayCount} value={dayCount} disabled={isDisabled}>
+                      {dayCount} Day{dayCount > 1 ? 's' : ''}{isDisabled ? ' (Unavailable)' : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+            <label style={{ display: 'block', marginBottom: '8px', color: '#111827', fontWeight: 500, fontSize: '1.12rem' }}>
               Check-out Date
             </label>
             <div style={{ position: 'relative' }}>
@@ -2336,22 +2500,7 @@ const BookingPage: React.FC<{
               </span>
               <select
                 value={bookingData.checkoutDate}
-                onChange={(e) => {
-                  const candidateCheckout = e.target.value;
-                  if (!bookingData.checkinDate) {
-                    alert('Please select check-in date first');
-                    return;
-                  }
-                  if (hasBookedDateInBetween(bookingData.checkinDate, candidateCheckout)) {
-                    alert('Some dates are already booked');
-                    return;
-                  }
-                  if (!isCheckoutDateAllowed(bookingData.checkinDate, candidateCheckout)) {
-                    alert('Check-out date must be after check-in date');
-                    return;
-                  }
-                  setBookingData({ ...bookingData, checkoutDate: candidateCheckout });
-                }}
+                onChange={(e) => updateCheckoutDate(e.target.value)}
                 style={{
                   width: '100%',
                   padding: '13px 42px 13px 46px',
@@ -2391,8 +2540,8 @@ const BookingPage: React.FC<{
               <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '5px' }}>
                 Only dates after {new Date(bookingData.checkinDate).toLocaleDateString('en-US', { 
                   month: 'short', 
-                  day: 'numeric' 
-                })} are available for check-out. Check-out is valid till 6:30 AM on the selected check-out date.
+                  day: 'numeric'
+                })} are available for check-out. Day-wise booking is enabled and check-out is valid till 6:30 AM on the selected check-out date.
               </div>
             )}
           </div>
@@ -3311,6 +3460,12 @@ const BookingDetailsLookupPage: React.FC<{
   const [mobile, setMobile] = useState('');
   const [loading, setLoading] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [bookedDates, setBookedDates] = useState<string[]>([]);
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
   const [error, setError] = useState('');
   const [record, setRecord] = useState<BookingRecord | null>(null);
 
@@ -3368,6 +3523,79 @@ const BookingDetailsLookupPage: React.FC<{
   const paidAmount = Number(record?.paymentAmount ?? 0);
   const pendingAmount = Math.max(finalAmount - paidAmount, 0);
 
+  React.useEffect(() => {
+    const loadBookedDates = async () => {
+      setCalendarLoading(true);
+      try {
+        const response = await apiFetch('/bookings');
+        const result = await parseJsonSafe(response);
+        if (!response.ok) {
+          throw new Error(result?.error || result?.message || 'Unable to load booking calendar');
+        }
+        const reserved = new Set<string>();
+        (result?.bookings || []).forEach((booking: any) => {
+          if (booking?.status === 'canceled') return;
+          const checkin = booking?.checkinDate ? new Date(booking.checkinDate) : null;
+          const checkout = booking?.checkoutDate ? new Date(booking.checkoutDate) : null;
+          if (checkin && checkout && !Number.isNaN(checkin.getTime()) && !Number.isNaN(checkout.getTime()) && checkout > checkin) {
+            const cursor = new Date(checkin);
+            while (cursor < checkout) {
+              reserved.add(cursor.toISOString().split('T')[0]);
+              cursor.setDate(cursor.getDate() + 1);
+            }
+          }
+        });
+        setBookedDates(Array.from(reserved));
+      } catch {
+        setBookedDates([]);
+      } finally {
+        setCalendarLoading(false);
+      }
+    };
+
+    void loadBookedDates();
+  }, []);
+
+  const renderBookingCalendar = () => {
+    const year = calendarMonth.getFullYear();
+    const month = calendarMonth.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const startWeekDay = firstDay.getDay();
+    const totalDays = lastDay.getDate();
+    const cells: React.ReactNode[] = [];
+
+    for (let i = 0; i < startWeekDay; i++) {
+      cells.push(<div key={`booking-details-blank-${i}`} />);
+    }
+
+    for (let day = 1; day <= totalDays; day++) {
+      const date = new Date(year, month, day);
+      const key = date.toISOString().split('T')[0];
+      const isBooked = bookedDates.includes(key);
+      cells.push(
+        <div
+          key={key}
+          className={`calendar-day-card settings-day-card ${isBooked ? 'is-booked' : 'is-available'}`}
+          style={{
+            minHeight: 'clamp(44px, 11vw, 58px)',
+            border: '1px solid #e2e8f0',
+            borderRadius: '7px',
+            padding: 'clamp(2px, 0.8vw, 4px)',
+            background: isBooked ? '#dc2626' : '#f8fafc'
+          }}
+        >
+          <div style={{ fontWeight: 700, fontSize: 'clamp(0.62rem, 2vw, 0.74rem)', color: isBooked ? '#fff' : '#0f172a', lineHeight: 1.1 }}>{day}</div>
+          <div className="calendar-day-sub" style={{ fontSize: 'clamp(0.5rem, 1.7vw, 0.6rem)', color: isBooked ? '#fff' : '#64748b', marginTop: '2px', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+            {isBooked ? 'Booked' : 'Available'}
+          </div>
+        </div>
+      );
+    }
+
+    return cells;
+  };
+
   const handlePayNow = async () => {
     if (!record) return;
     const cleanCode = String(record.bookingCode || bookingCode).replace(/\D/g, '').slice(0, 4);
@@ -3390,9 +3618,49 @@ const BookingDetailsLookupPage: React.FC<{
 
   return (
     <div className="page-center" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-      <div className="surface-card" style={{ background: 'rgba(255,255,255,0.96)', borderRadius: '20px', padding: '28px', maxWidth: '560px', width: '100%', boxShadow: '0 20px 40px rgba(0,0,0,0.12)' }}>
-        <h2 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>Your Booking Details</h2>
+      <div className="surface-card" style={{ background: 'rgba(255,255,255,0.96)', borderRadius: '20px', padding: '28px', maxWidth: '860px', width: '100%', boxShadow: '0 20px 40px rgba(0,0,0,0.12)' }}>
+        <h2 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>Your Booking</h2>
         <p style={{ margin: '0 0 16px 0', color: '#475569' }}>Enter Allotment No. and mobile number to view your booking.</p>
+
+        <div style={{ border: '1px solid #e2e8f0', borderRadius: '12px', padding: '12px', background: '#ffffff', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', gap: '8px', flexWrap: 'wrap' }}>
+            <div style={{ fontWeight: 700, color: '#0f172a' }}>Check Date Calendar</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}
+                style={{ border: '1px solid #cbd5e1', borderRadius: '8px', padding: '6px 10px', background: '#f8fafc', cursor: 'pointer' }}
+              >
+                Prev
+              </button>
+              <div style={{ fontWeight: 700, color: '#0f172a', minWidth: '145px', textAlign: 'center' }}>
+                {calendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </div>
+              <button
+                type="button"
+                onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}
+                style={{ border: '1px solid #cbd5e1', borderRadius: '8px', padding: '6px 10px', background: '#f8fafc', cursor: 'pointer' }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+          <div className="calendar-weekdays-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '6px', marginBottom: '6px', fontSize: '0.73rem', fontWeight: 700, color: '#475569' }}>
+            <div style={{ textAlign: 'center' }}>Sun</div>
+            <div style={{ textAlign: 'center' }}>Mon</div>
+            <div style={{ textAlign: 'center' }}>Tue</div>
+            <div style={{ textAlign: 'center' }}>Wed</div>
+            <div style={{ textAlign: 'center' }}>Thu</div>
+            <div style={{ textAlign: 'center' }}>Fri</div>
+            <div style={{ textAlign: 'center' }}>Sat</div>
+          </div>
+          <div className="calendar-days-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '6px' }}>
+            {renderBookingCalendar()}
+          </div>
+          <div style={{ marginTop: '8px', fontSize: '0.78rem', color: '#475569' }}>
+            {calendarLoading ? 'Loading booking calendar...' : 'Booked dates are highlighted. Availability is shown for quick check.'}
+          </div>
+        </div>
 
         <form onSubmit={handleLookup} style={{ display: 'grid', gap: '10px', marginBottom: '14px' }}>
           <input
@@ -3418,7 +3686,7 @@ const BookingDetailsLookupPage: React.FC<{
             disabled={loading}
             style={{ border: 'none', borderRadius: '10px', padding: '11px 14px', background: '#1d4ed8', color: '#fff', fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer' }}
           >
-            {loading ? 'Checking...' : 'View Booking Details'}
+            {loading ? 'Checking...' : 'View Booking'}
           </button>
         </form>
 
