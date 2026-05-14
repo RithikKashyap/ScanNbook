@@ -14,6 +14,9 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 const upload = multer({ storage: multer.memoryStorage() });
+const DEFAULT_LOCAL_DATABASE_URL = 'mongodb://127.0.0.1:27017/qr-booking-system';
+const configuredDatabaseUrl = String(process.env.DATABASE_URL || '').trim();
+const fallbackDatabaseUrl = String(process.env.DATABASE_FALLBACK_URL || DEFAULT_LOCAL_DATABASE_URL).trim();
 const razorpayKeyId = process.env.RAZORPAY_KEY_ID || '';
 const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || '';
 const razorpayWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
@@ -30,6 +33,109 @@ if (razorpayKeyId && razorpayKeySecret) {
         key_secret: razorpayKeySecret
     });
 }
+
+mongoose.set('bufferCommands', false);
+mongoose.set('bufferTimeoutMS', 0);
+
+let activeDatabaseTarget = '';
+
+const getDatabaseStatus = () => {
+    const readyState = mongoose.connection.readyState;
+    const labels = {
+        0: 'disconnected',
+        1: 'connected',
+        2: 'connecting',
+        3: 'disconnecting'
+    };
+
+    return {
+        readyState,
+        state: labels[readyState] || 'unknown',
+        target: activeDatabaseTarget || null
+    };
+};
+
+const databaseRouteExclusions = new Set([
+    '/health',
+    '/auth/admin-login'
+]);
+
+const requireDatabaseConnection = (req, res, next) => {
+    if (databaseRouteExclusions.has(req.path)) {
+        return next();
+    }
+
+    if (mongoose.connection.readyState === 1) {
+        return next();
+    }
+
+    return res.status(503).json({
+        message: 'Database unavailable',
+        error: 'MongoDB is not connected. Check DATABASE_URL, whitelist your current IP in MongoDB Atlas, or run a local MongoDB instance.',
+        database: getDatabaseStatus()
+    });
+};
+
+const getDatabaseConnectionCandidates = () => {
+    const seen = new Set();
+    const candidates = [];
+
+    const addCandidate = (label, url) => {
+        const trimmedUrl = String(url || '').trim();
+        if (!trimmedUrl || seen.has(trimmedUrl)) return;
+        seen.add(trimmedUrl);
+        candidates.push({ label, url: trimmedUrl });
+    };
+
+    addCandidate('configured DATABASE_URL', configuredDatabaseUrl);
+    addCandidate('local fallback', fallbackDatabaseUrl);
+
+    return candidates;
+};
+
+const connectToDatabase = async () => {
+    const candidates = getDatabaseConnectionCandidates();
+    let lastError = null;
+
+    for (const candidate of candidates) {
+        try {
+            await mongoose.connect(candidate.url, {
+                useNewUrlParser: true,
+                useUnifiedTopology: true,
+                serverSelectionTimeoutMS: 10000
+            });
+            activeDatabaseTarget = candidate.label;
+            console.log(`Connected to MongoDB database using ${candidate.label}`);
+            return true;
+        } catch (err) {
+            lastError = err;
+            activeDatabaseTarget = '';
+            console.error(`Database connection error (${candidate.label}):`, err);
+            if (mongoose.connection.readyState !== 0) {
+                try {
+                    await mongoose.disconnect();
+                } catch {
+                    // ignore cleanup errors between retries
+                }
+            }
+        }
+    }
+
+    console.error('Starting server without database connection. Database-backed routes will return HTTP 503.');
+    if (lastError) {
+        console.error('Last database connection error:', lastError);
+    }
+    return false;
+};
+
+mongoose.connection.on('disconnected', () => {
+    activeDatabaseTarget = '';
+    console.warn('MongoDB disconnected');
+});
+
+mongoose.connection.on('error', (err) => {
+    console.error('MongoDB connection error:', err);
+});
 
 const getAdminAuthPayload = (req) => {
     const authHeader = String(req.headers.authorization || '');
@@ -154,27 +260,34 @@ app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), asy
 //     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 //     allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with']
 // }));
+
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(origin => origin.trim()).filter(Boolean);
+if (allowedOrigins.length === 0) {
+  allowedOrigins.push('http://localhost:3000', 'http://localhost:3100', 'http://127.0.0.1:3000', 'http://127.0.0.1:3100');
+}
+
 app.use(cors({
-  origin: true,
-  credentials: true
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with']
 }));
 
 app.options('*', cors());
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
-
-mongoose.connect(process.env.DATABASE_URL || 'mongodb://localhost:27017/qr-booking-system', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-})
-.then(() => {
-    console.log('Connected to MongoDB database');
-})
-.catch((err) => {
-    console.error('Database connection error:', err);
-    console.log('Starting server without database connection...');
-});
+app.use('/api', requireDatabaseConnection);
+void connectToDatabase();
 
 const bookingSchema = new mongoose.Schema({
     bookingCode: { type: String, unique: true, sparse: true },
@@ -437,7 +550,8 @@ app.get('/api/health', (req, res) => {
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         memory: process.memoryUsage(),
-        node_version: process.version
+        node_version: process.version,
+        database: getDatabaseStatus()
     });
 });
 

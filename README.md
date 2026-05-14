@@ -1,8 +1,7 @@
-<<<<<<< HEAD
-# QR Booking System
+# ScanNbook
 
 ## Overview
-The QR Booking System is a web application that allows users to book services using QR codes. The system consists of a frontend built with React and a backend built with Node.js and Express. Users can register, log in, book dates, process payments, and receive confirmation messages.
+The ScanNbook is a web application that allows users to book services using QR codes. The system consists of a frontend built with React and a backend built with Node.js and Express. Users can register, log in, book dates, process payments, and receive confirmation messages.
 
 ## Project Structure
 ```
@@ -14,16 +13,22 @@ qr-booking-system
 │   │   ├── controllers
 │   │   │   ├── authController.ts
 │   │   │   ├── bookingController.ts
-│   │   │   └── paymentController.ts
+│   │   │   ├── paymentController.ts
+│   │   │   ├── qrController.ts
+│   │   │   └── settingsController.ts
 │   │   ├── services
 │   │   │   ├── authService.ts
 │   │   │   ├── bookingService.ts
 │   │   │   └── paymentService.ts
 │   │   ├── models
 │   │   │   ├── user.ts
-│   │   │   └── booking.ts
+│   │   │   ├── booking.ts
+│   │   │   └── uiAsset.ts
 │   │   ├── routes
 │   │   │   └── index.ts
+│   │   ├── middleware
+│   │   │   ├── auth.ts
+│   │   │   └── adminAuth.ts
 │   │   └── utils
 │   │       └── qrUtils.ts
 │   ├── package.json
@@ -108,11 +113,53 @@ qr-booking-system
 - Access the frontend application at `http://localhost:3000`.
 - Users can register, log in, scan QR codes, make bookings, and process payments through the application.
 
-## Contributing
-Contributions are welcome! Please open an issue or submit a pull request for any improvements or bug fixes.
+## Deployment
 
-## License
-This project is licensed under the MIT License. See the LICENSE file for details.
-=======
-# ScanNbook
->>>>>>> 091832fb3e45a4ef625571f79327a2608bfa6740
+### Render.com Deployment
+
+1. **Backend Deployment:**
+   - Create a new Web Service on Render.com
+   - Connect your GitHub repository
+   - Set the following environment variables:
+     - `NODE_ENV=production`
+     - `DATABASE_URL=your_mongodb_connection_string`
+     - `JWT_SECRET=your_secure_jwt_secret`
+     - `RAZORPAY_KEY_ID=your_razorpay_key_id`
+     - `RAZORPAY_KEY_SECRET=your_razorpay_key_secret`
+     - `CORS_ORIGINS=https://your-frontend-app.onrender.com`
+     - `PORT=5000`
+   - Set build command: `npm install`
+   - Set start command: `npm run start:prod`
+
+2. **Frontend Deployment:**
+   - Create a new Static Site on Render.com
+   - Connect your GitHub repository (select frontend folder)
+   - Set build command: `npm run build`
+   - Set publish directory: `build`
+   - Add environment variable: `REACT_APP_API_BASE_URL=https://your-backend-app.onrender.com/api`
+
+### Docker Deployment
+
+1. **Using Docker Compose:**
+   ```bash
+   docker-compose up --build
+   ```
+
+2. **Environment Variables:**
+   - Copy `.env.example` to `.env` in both backend and frontend directories
+   - Update the values according to your deployment environment
+
+## Troubleshooting
+
+### Common Issues Fixed
+
+1. **Merge Conflicts:** Resolved Git merge conflicts in README.md
+2. **CORS Issues:** Configured proper CORS origins from environment variables
+3. **Error Handling:** Added React Error Boundary to prevent blank pages
+4. **Build Optimization:** Disabled source maps and optimized bundle size
+5. **Environment Variables:** Added production environment configurations
+
+### Health Checks
+
+- Backend health check: `GET /api/health`
+- Frontend error boundary provides user-friendly error messages

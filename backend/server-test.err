@@ -1,0 +1,2 @@
+(node:13408) [DEP0170] DeprecationWarning: The URL mongodb://scannbook:Rithik8000@ac-kfzlxd8-shard-00-00.wxdm1xh.mongodb.net:27017,ac-kfzlxd8-shard-00-01.wxdm1xh.mongodb.net:27017,ac-kfzlxd8-shard-00-02.wxdm1xh.mongodb.net:27017/?authSource=admin&replicaSet=atlas-kxszou-shard-0&appName=Cluster0&ssl=true is invalid. Future versions of Node.js will throw an error.
+(Use `node --trace-deprecation ...` to show where the warning was created)

@@ -10,6 +10,7 @@
     "dev:js": "node src/server.js",
     "start:simple": "node src/server.js",
     "start:safe": "node start.js",
+    "start:prod": "NODE_ENV=production node src/server.js",
     "build": "tsc",
     "test": "jest"
   },

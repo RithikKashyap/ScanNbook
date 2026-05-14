@@ -801,10 +801,8 @@ const LoginPage: React.FC<{
   const [feedbackPhone, setFeedbackPhone] = useState('');
   const [settingsStatusText, setSettingsStatusText] = useState('');
   const settingsMenuRef = React.useRef<HTMLDivElement | null>(null);
-  const checkDateCalendarRef = React.useRef<HTMLDivElement | null>(null);
-  const [showCheckDateCalendar, setShowCheckDateCalendar] = useState(true);
   const [selectedLanguage, setSelectedLanguage] = useState<AppLanguage>('en');
-  const settingItems = ['Admin', 'Language', 'Contact', 'Service', 'Booking Detail', 'Pay', 'Complain', 'Feedback'];
+  const settingItems = ['Admin', 'Language', 'Contact', 'Service', 'Check Date', 'Booking Detail', 'Pay', 'Complain', 'Feedback'];
   const languageText = {
     en: {
       back: 'Back',
@@ -939,12 +937,19 @@ const LoginPage: React.FC<{
       onPendingPaymentLogin();
       return;
     }
+    if (item.toLowerCase() === 'check date') {
+      setIsSettingsOpen(false);
+      setSettingsStatusText('');
+      const now = new Date();
+      setSettingsCalendarMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+      setActiveSettingsTab('booking');
+      return;
+    }
 
     const tabMap: Record<string, SettingsTab> = {
       language: 'language',
       contact: 'contact',
       service: 'service',
-      'check date': 'booking',
       complain: 'complain',
       feedback: 'feedback'
     };
@@ -1270,50 +1275,24 @@ const LoginPage: React.FC<{
           <div style={{ width: '98px', height: '42px', justifySelf: 'end' }} />
         </div>
 
-        {showCheckDateCalendar && (
-          <div
-            ref={checkDateCalendarRef}
-            style={{
-              border: '1px solid #dbeafe',
-              borderRadius: '12px',
-              background: '#f8fbff',
-              padding: '8px',
-              marginBottom: '12px'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <button
-                type="button"
-                onClick={() => setSettingsCalendarMonth(new Date(settingsCalendarMonth.getFullYear(), settingsCalendarMonth.getMonth() - 1, 1))}
-                style={{ border: '1px solid #cbd5e1', borderRadius: '7px', padding: '4px 8px', background: '#ffffff', cursor: 'pointer', fontSize: '0.74rem' }}
-              >
-                Prev
-              </button>
-              <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.86rem' }}>
-                {settingsCalendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-              </div>
-              <button
-                type="button"
-                onClick={() => setSettingsCalendarMonth(new Date(settingsCalendarMonth.getFullYear(), settingsCalendarMonth.getMonth() + 1, 1))}
-                style={{ border: '1px solid #cbd5e1', borderRadius: '7px', padding: '4px 8px', background: '#ffffff', cursor: 'pointer', fontSize: '0.74rem' }}
-              >
-                Next
-              </button>
-            </div>
-            <div className="calendar-weekdays-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '4px', marginBottom: '4px', fontSize: '0.64rem', fontWeight: 700, color: '#475569' }}>
-              <div style={{ textAlign: 'center' }}>Sun</div>
-              <div style={{ textAlign: 'center' }}>Mon</div>
-              <div style={{ textAlign: 'center' }}>Tue</div>
-              <div style={{ textAlign: 'center' }}>Wed</div>
-              <div style={{ textAlign: 'center' }}>Thu</div>
-              <div style={{ textAlign: 'center' }}>Fri</div>
-              <div style={{ textAlign: 'center' }}>Sat</div>
-            </div>
-            <div className="calendar-days-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '4px' }}>
-              {renderSettingsCalendar()}
-            </div>
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={() => openSettingsTab('Check Date')}
+          style={{
+            width: '100%',
+            marginBottom: '14px',
+            border: '1px solid #bfdbfe',
+            borderRadius: '14px',
+            padding: '12px 16px',
+            background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+            color: '#1d4ed8',
+            cursor: 'pointer',
+            fontSize: '1rem',
+            fontWeight: 700
+          }}
+        >
+          Check Date
+        </button>
 
         {hallSlides.length > 0 && (
           <div style={{ textAlign: 'center', marginBottom: '30px' }}>
